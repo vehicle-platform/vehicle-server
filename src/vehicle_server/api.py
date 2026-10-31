@@ -20,7 +20,7 @@ from fastapi import Depends, FastAPI, HTTPException, Query, Request, UploadFile,
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, PlainTextResponse
 
-from vehicle_server import __version__, index, report, series, stream
+from vehicle_server import __version__, gps_track, index, report, series, stream
 from vehicle_server.config import Settings, load_settings
 from vehicle_server.ingest import (
     SESSION_ID_RE,
@@ -28,6 +28,7 @@ from vehicle_server.ingest import (
     SessionConflictError,
     ingest_path,
 )
+from vehicle_server.position import is_position_name
 
 _UPLOAD_CHUNK_BYTES = 1024 * 1024
 
@@ -146,6 +147,92 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     detail=f"unknown or unavailable series: {', '.join(bad) or '(empty list)'}",
                 )
         return series.build_response(session_id, available, names, max_points, from_ms, to_ms)
+
+    @app.get("/sessions/{session_id}/track", dependencies=[AuthDep])
+    def get_session_track(
+        session_id: str,
+        settings: SettingsDep,
+        max_points: Annotated[
+            int, Query(ge=gps_track.MIN_MAX_POINTS, le=gps_track.MAX_MAX_POINTS)
+        ] = gps_track.DEFAULT_MAX_POINTS,
+        min_heading_speed_mps: Annotated[
+            float, Query(ge=gps_track.MIN_HEADING_SPEED_MPS, le=gps_track.MAX_HEADING_SPEED_MPS)
+        ] = gps_track.DEFAULT_MIN_HEADING_SPEED_MPS,
+        color: str | None = None,
+        from_ms: int | None = None,
+        to_ms: int | None = None,
+    ) -> dict:
+        session_dir = settings.sessions_dir / session_id
+        if not SESSION_ID_RE.match(session_id) or not session_dir.is_dir():
+            raise HTTPException(status_code=404, detail=f"unknown session: {session_id}")
+
+        available = series.load_all(session_dir)
+        speed = available.get("sensor.gps_ground_speed")
+        heading = available.get("sensor.gps_heading")
+        fix_type = available.get("sensor.gps_fix_type")
+        if speed is None or heading is None or fix_type is None:
+            raise HTTPException(status_code=404, detail="session has no GPS")
+
+        if color is not None and (is_position_name(color) or color not in available):
+            # Same status and wording as /stats for an unknown or position-looking name.
+            raise HTTPException(status_code=404, detail=f"unknown or unavailable series: {color}")
+
+        t0 = series.t0_of(available)
+        lo = None if from_ms is None else t0 + from_ms
+        hi = None if to_ms is None else t0 + to_ms
+        speed_times, speed_values = series.window(speed.times, speed.values, lo, hi)
+        try:
+            track = gps_track.build_track(
+                gps_track.TrackSeries(speed_times, speed_values),
+                gps_track.TrackSeries(heading.times, heading.values),
+                gps_track.TrackSeries(fix_type.times, fix_type.values),
+                max_points=max_points,
+                min_heading_speed_mps=min_heading_speed_mps,
+            )
+        except gps_track.TrackTooManyPoints as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+        if not track.segments and from_ms is None and to_ms is None:
+            raise HTTPException(status_code=404, detail="session has no GPS")
+
+        color_series = available.get(color) if color is not None else None
+        color_stale = gps_track.series_stale_after_ms(color) if color is not None else None
+        segments: list[dict] = []
+        for segment in track.segments:
+            entry: dict[str, object] = {
+                "t_ms": [t - t0 for t in segment.t_ms],
+                "x_m": segment.x_m,
+                "y_m": segment.y_m,
+                "speed_mps": segment.speed_mps,
+                "heading_deg": segment.heading_deg,
+                "gap_before_ms": segment.gap_before_ms,
+            }
+            if color_series is not None:
+                entry["color_v"] = gps_track.sample_series(
+                    gps_track.TrackSeries(color_series.times, color_series.values),
+                    segment.t_ms,
+                    color_stale,
+                )
+            segments.append(entry)
+
+        return {
+            "session_id": session_id,
+            "t0_device_ms": t0,
+            "method": "dead_reckoning",
+            "frame": "relative_enu_from_first_fix",
+            "max_points": max_points,
+            "points_total": track.points_total,
+            "downsampled": track.downsampled,
+            "path_length_m": track.path_length_m,
+            "segments_total": track.segments_total,
+            "excluded": track.excluded,
+            "color": (
+                {"name": color, "unit": color_series.unit}
+                if color is not None and color_series is not None
+                else None
+            ),
+            "segments": segments,
+        }
 
     @app.get("/sessions/{session_id}/stats", dependencies=[AuthDep])
     def get_session_stats(
