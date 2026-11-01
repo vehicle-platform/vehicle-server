@@ -193,3 +193,66 @@ def test_color_sampling_holds_until_staleness():
         2.0,
         None,
     ]
+
+
+def test_single_sample_is_one_point_with_zero_length():
+    track = gps_track.build_track(
+        series([100], [10.0]),
+        series([100], [90.0]),
+        series([100], [fix("fix3d")]),
+    )
+    assert track.segments_total == 1
+    assert track.points_total == 1
+    assert track.path_length_m == 0.0
+    assert track.segments[0].gap_before_ms is None
+    assert track.segments[0].t_ms == [100]
+
+
+def test_all_no_fix_is_excluded_without_inventing_a_segment():
+    times = [0, 100, 200]
+    track = gps_track.build_track(
+        series(times, [10.0] * 3),
+        series(times, [0.0] * 3),
+        series(times, [fix("noFix")] * 3),
+    )
+    assert track.segments == []
+    assert track.segments_total == 0
+    assert track.points_total == 0
+    assert track.path_length_m == 0.0
+    assert track.excluded == {"no_fix": 3, "stale_fix": 0, "untrusted_heading": 0}
+
+
+def test_non_finite_input_is_excluded_and_never_reaches_the_output():
+    times = [0, 100, 200, 300, 400]
+    track = gps_track.build_track(
+        series(times, [10.0, math.nan, math.inf, 10.0, 10.0]),
+        series(times, [0.0, 0.0, 0.0, math.nan, math.inf]),
+        series(times, [fix("fix3d")] * 5),
+    )
+    assert track.excluded == {"no_fix": 2, "stale_fix": 0, "untrusted_heading": 2}
+    assert track.segments_total == 1
+    assert track.points_total == 1
+    assert all(
+        math.isfinite(value)
+        for segment in track.segments
+        for values in (segment.x_m, segment.y_m, segment.speed_mps, segment.heading_deg)
+        for value in values
+    )
+
+
+def test_a_session_shorter_than_the_stale_limit_is_one_segment():
+    times = [0, 100]
+    track = gps_track.build_track(
+        series(times, [10.0, 10.0]),
+        series(times, [0.0, 0.0]),
+        series(times, [fix("fix3d"), fix("fix3d")]),
+    )
+    assert track.segments_total == 1
+    assert track.segments[0].gap_before_ms is None
+    assert track.path_length_m == pytest.approx(1.0)
+
+
+@pytest.mark.parametrize("bad", [math.nan, math.inf, -math.inf])
+def test_non_finite_min_heading_speed_is_rejected(bad: float):
+    with pytest.raises(ValueError):
+        gps_track.build_track(*straight(), min_heading_speed_mps=bad)

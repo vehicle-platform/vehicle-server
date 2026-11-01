@@ -15,6 +15,7 @@ from vehicle_server.decode import (
     GPS_HEADER,
 )
 from vehicle_server.defs import ble as defs_ble
+from vehicle_server.defs import vehicle_derived
 from vehicle_server.ingest import ingest_path
 
 from .conftest import copy_fixture
@@ -27,7 +28,7 @@ HEADING_LSB = GPS["scale"]["heading"]["lsbPerUnit"]
 GNSS_FIX_OK_BIT = next(bit["bit"] for bit in GPS["flags"]["bits"] if bit["name"] == "gnssFixOk")
 
 
-def _gps_rows(points: list[tuple[int, float, float]]) -> list[list[str]]:
+def _gps_rows(points: list[tuple[int, float, float]], fix_name: str = "fix3d") -> list[list[str]]:
     rows: list[list[str]] = []
     for seq, (t, speed, heading) in enumerate(points):
         speed_raw = round(speed * SPEED_LSB)
@@ -42,7 +43,7 @@ def _gps_rows(points: list[tuple[int, float, float]]) -> list[list[str]]:
                 "headingOfMotion": heading_raw,
                 "speedAccuracy": 300,
                 "headingAccuracy": 50_000,
-                "fixType": FIX["fix3d"],
+                "fixType": FIX[fix_name],
                 "numSv": 10,
                 "flags": 1 << GNSS_FIX_OK_BIT,
                 "reserved": 0,
@@ -60,7 +61,7 @@ def _gps_rows(points: list[tuple[int, float, float]]) -> list[list[str]]:
             "heading_of_motion": str(heading_raw),
             "speed_accuracy": "300",
             "heading_accuracy": "50000",
-            "fix_type": str(FIX["fix3d"]),
+            "fix_type": str(FIX[fix_name]),
             "num_sv": "10",
             "flags": str(1 << GNSS_FIX_OK_BIT),
             "ground_speed_mps": repr(speed_raw / SPEED_LSB),
@@ -76,10 +77,13 @@ def _gps_rows(points: list[tuple[int, float, float]]) -> list[list[str]]:
 
 
 def _make_gps_session(
-    fixtures_dir: Path, tmp_path: Path, points: list[tuple[int, float, float]]
+    fixtures_dir: Path,
+    tmp_path: Path,
+    points: list[tuple[int, float, float]],
+    fix_name: str = "fix3d",
 ) -> Path:
     session = copy_fixture(fixtures_dir / "v4_gps_session", tmp_path / "gps")
-    rows = _gps_rows(points)
+    rows = _gps_rows(points, fix_name)
     (session / "gps.csv").write_text(
         "\n".join([",".join(GPS_HEADER), *(",".join(row) for row in rows)]) + "\n"
     )
@@ -160,7 +164,11 @@ def test_track_color_uses_the_defs_unit_and_nulls_after_staleness(
         available = original(session_dir)
         t0 = series.t0_of(available)
         available["sensor.lean_angle"] = series.SeriesData(
-            "sensor.lean_angle", "sensor", "deg", [t0 + 600, t0 + 700], [12.0, 15.0]
+            "sensor.lean_angle",
+            "sensor",
+            vehicle_derived.SENSORS["lean_angle"]["unit"],
+            [t0 + 600, t0 + 700],
+            [12.0, 15.0],
         )
         return available
 
@@ -190,3 +198,52 @@ def test_track_max_points_out_of_range_is_422(client: TestClient, gps_session_id
     assert _get(client, gps_session_id, max_points=9).status_code == 422
     assert _get(client, gps_session_id, max_points=20001).status_code == 422
     assert _get(client, gps_session_id, min_heading_speed_mps=11).status_code == 422
+
+
+def test_track_single_gps_sample_is_a_zero_length_point(
+    settings: Settings, client: TestClient, fixtures_dir: Path, tmp_path: Path
+):
+    session_id = ingest_path(
+        _make_gps_session(fixtures_dir, tmp_path, [(9200, 10.0, 90.0)]), settings
+    ).session_id
+    body = _get(client, session_id).json()
+    assert body["segments_total"] == 1
+    assert body["points_total"] == 1
+    assert body["path_length_m"] == 0.0
+    assert body["segments"][0]["t_ms"] == [9200 - body["t0_device_ms"]]
+    assert body["segments"][0]["x_m"] == [0.0]
+    assert body["segments"][0]["y_m"] == [0.0]
+
+
+def test_track_all_no_fix_is_404_without_a_window(
+    settings: Settings, client: TestClient, fixtures_dir: Path, tmp_path: Path
+):
+    points = [(9200 + i * 100, 10.0, 90.0) for i in range(4)]
+    session_id = ingest_path(
+        _make_gps_session(fixtures_dir, tmp_path, points, fix_name="noFix"), settings
+    ).session_id
+    resp = _get(client, session_id)
+    assert resp.status_code == 404
+    assert resp.json()["detail"] == "session has no GPS"
+
+
+def test_track_empty_and_inverted_windows_are_empty_not_errors(
+    client: TestClient, gps_session_id: str
+):
+    for params in (
+        {"from_ms": 1_000_000, "to_ms": 2_000_000},
+        {"from_ms": 2000, "to_ms": 1000},
+    ):
+        body = _get(client, gps_session_id, **params).json()
+        assert body["segments"] == []
+        assert body["segments_total"] == 0
+        assert body["points_total"] == 0
+        assert body["path_length_m"] == 0.0
+        assert body["excluded"] == {"no_fix": 0, "stale_fix": 0, "untrusted_heading": 0}
+
+
+def test_track_max_points_accepts_the_upper_bound(client: TestClient, many_session_id: str):
+    body = _get(client, many_session_id, max_points=20000).json()
+    assert body["downsampled"] is False
+    assert body["points_total"] == 100
+    assert sum(len(segment["t_ms"]) for segment in body["segments"]) == 100
