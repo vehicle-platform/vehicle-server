@@ -11,7 +11,7 @@ import pyarrow.parquet as pq
 import pytest
 from fastapi.testclient import TestClient
 
-from vehicle_server import index
+from vehicle_server import index, ride_summary
 from vehicle_server.api import create_app
 from vehicle_server.config import Settings
 from vehicle_server.defs import vehicle_derived
@@ -340,3 +340,111 @@ def test_summary_scalar_values_agree_with_the_parquet_rows(
             assert row["value"] == entry["value"]
             assert row["flag"] == entry["flag"]
             assert row["unit"] == entry["unit"]
+
+
+def test_rides_requires_token(client: TestClient):
+    assert client.get("/rides").status_code == 401
+
+
+def _seed_rides(settings: Settings) -> None:
+    computed = _summary(
+        {
+            "ride_coolant_rate_max": {
+                "status": "computed",
+                "value": None,
+                "unit": "degC/min",
+                "flag": "invalid_input",
+            }
+        }
+    )
+    _write_report(settings, SESSION_ID, _block(computed))
+    _add_index(settings, SESSION_ID, "2026-01-03T10:00:00+00:00")
+
+    not_ready = _summary(
+        {"ride_distance": {"status": "not_ready", "reason": "ready_phase0", "pending_inputs": []}}
+    )
+    _write_report(settings, SECOND_ID, _block(not_ready))
+    _add_index(settings, SECOND_ID, "2026-01-02T10:00:00+00:00")
+
+    _add_index(settings, THIRD_ID, "2026-01-01T10:00:00+00:00")
+
+
+def test_rides_returns_scalar_columns_and_skips_missing_summaries(
+    settings: Settings, client: TestClient
+):
+    _seed_rides(settings)
+    body = _get_rides(client).json()
+    assert body["skipped"] == 1
+    assert [row["session_id"] for row in body["rows"]] == [SECOND_ID, SESSION_ID]
+    assert [col["name"] for col in body["columns"]] == ride_summary.scalar_names()
+    first, second = body["rows"]
+    assert first["values"]["ride_distance"] is None
+    assert first["flags"]["ride_distance"] == "not_ready"
+    assert second["values"]["ride_distance"] == 12.3
+    assert second["values"]["ride_time"] == 90.0
+    assert second["values"]["ride_coolant_rate_max"] is None
+    assert second["flags"]["ride_coolant_rate_max"] == "invalid_input"
+
+
+def test_rides_names_are_checked_and_keep_the_requested_order(
+    settings: Settings, client: TestClient
+):
+    _seed_rides(settings)
+    body = _get_rides(client, names="ride_time,ride_distance").json()
+    assert [col["name"] for col in body["columns"]] == ["ride_time", "ride_distance"]
+    assert [col["unit"] for col in body["columns"]] == ["s", "km"]
+
+    for params in (
+        {"names": "nope"},
+        {"names": "ride_distance,nope"},
+        {"names": "ride_coolant_time_at_temp"},
+        {"names": ""},
+    ):
+        resp = _get_rides(client, **params)
+        assert resp.status_code == 422, params
+    assert "nope" in _get_rides(client, names="nope").json()["detail"]
+    assert (
+        "binned summaries" in _get_rides(client, names="ride_coolant_time_at_temp").json()["detail"]
+    )
+
+
+def test_rides_date_range_is_inclusive_and_utc(settings: Settings, client: TestClient):
+    _seed_rides(settings)
+    body = _get_rides(client, **{"from": "2026-01-02", "to": "2026-01-02"}).json()
+    assert [row["session_id"] for row in body["rows"]] == [SECOND_ID]
+    body = _get_rides(
+        client,
+        **{"from": "2026-01-02T09:00:00+01:00", "to": "2026-01-02T23:59:59Z"},
+    ).json()
+    assert [row["session_id"] for row in body["rows"]] == [SECOND_ID]
+    body = _get_rides(client, **{"from": "2026-01-04"}).json()
+    assert body["rows"] == []
+
+
+@pytest.mark.parametrize("value", ["not-a-date", "2026-13-01", "2026-01-01T99:00:00"])
+def test_rides_invalid_date_is_422(client: TestClient, value: str):
+    resp = _get_rides(client, **{"from": value})
+    assert resp.status_code == 422
+
+
+def test_rides_binned_columns_have_no_cell_values(settings: Settings, client: TestClient):
+    _write_report(settings, SESSION_ID, _block(_summary({})))
+    _write_rows(settings, SESSION_ID, _binned_rows(SESSION_ID, [1.0] + [None] * 9))
+    _add_index(settings, SESSION_ID, "2026-01-03T10:00:00+00:00")
+    body = _get_rides(client, names="ride_distance").json()
+    assert body["rows"][0]["values"] == {"ride_distance": 12.3}
+    assert list(body["rows"][0]["values"]) == ["ride_distance"]
+
+
+def test_rides_missing_value_in_an_older_report_is_null_with_status(
+    settings: Settings, client: TestClient
+):
+    _write_report(
+        settings,
+        SESSION_ID,
+        _block({"ride_distance": {"status": "computed", "value": 1.0, "unit": "km", "flag": None}}),
+    )
+    _add_index(settings, SESSION_ID, "2026-01-03T10:00:00+00:00")
+    body = _get_rides(client, names="ride_distance,ride_time").json()
+    assert body["rows"][0]["values"] == {"ride_distance": 1.0, "ride_time": None}
+    assert body["rows"][0]["flags"] == {"ride_distance": None, "ride_time": "missing"}

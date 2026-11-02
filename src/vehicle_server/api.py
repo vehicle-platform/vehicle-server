@@ -244,6 +244,32 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         except ride_summary.NoRideSummary as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
+    @app.get("/rides", dependencies=[AuthDep])
+    def list_rides(
+        settings: SettingsDep,
+        from_: str | None = Query(None, alias="from"),
+        to: str | None = None,
+        names: str | None = None,
+    ) -> dict:
+        try:
+            selected = ride_summary.select_scalar_names(names)
+            start = ride_summary.parse_utc_bound(from_, end=False) if from_ else None
+            end = ride_summary.parse_utc_bound(to, end=True) if to else None
+        except ride_summary.BadRideQuery as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+        sessions: list[tuple[str, str | None, dict | None]] = []
+        for row in index.list_sessions(settings.index_db_path):
+            session_dir = settings.sessions_dir / row.session_id
+            sessions.append(
+                (
+                    row.session_id,
+                    row.created_utc,
+                    ride_summary.read_summary_block(session_dir),
+                )
+            )
+        return ride_summary.build_rides(sessions, selected, start, end)
+
     @app.get("/sessions/{session_id}/stats", dependencies=[AuthDep])
     def get_session_stats(
         session_id: str,

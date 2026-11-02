@@ -285,7 +285,9 @@ def parse_utc_bound(value: str, *, end: bool) -> dt.datetime:
     return parsed.astimezone(dt.UTC)
 
 
-def created_in_range(created_utc: str | None, start: dt.datetime | None, end: dt.datetime) -> bool:
+def created_in_range(
+    created_utc: str | None, start: dt.datetime | None, end: dt.datetime | None
+) -> bool:
     if start is None and end is None:
         return True
     if created_utc is None:
