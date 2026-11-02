@@ -309,9 +309,11 @@ recorded as `derived: {"error": ...}`, leaves the ingest status unchanged and wr
 
 `src/vehicle_server/derived/summary.py` evaluates the class-B signals after the class-A pass.
 Phase 0 has no ride segmentation: **one stored session is one ride** (the report says
-`ride_definition: "session"`). A summary reads the valid rows of its class-A inputs, the scalar
-results of its class-B inputs (`ride_fuel_consumption` follows `ride_fuel_used` and
-`ride_distance`, dependency order) and the raw `did.*` / `sensor.*` series. Time integrals and
+`ride_definition: "session"`). Every summary reads every input it declares in the defs (`inputs:`),
+so a declared input always gates or changes the result (D-095). A summary reads the valid rows of
+its class-A inputs, the scalar results of its class-B inputs (`ride_fuel_consumption` follows
+`ride_fuel_used` and `ride_distance`, dependency order) and the raw `did.*` / `sensor.*` series.
+Time integrals and
 time-in-cell use the class-A hold rule (`formulas.hold_segments`): a value is held between
 samples but never beyond the input's freshness (`did.*` of a class-B signal: the DID's own `stale_after_ms`,
 D-087; sensors: `SENSORS` `stale_after_ms`), so a gap adds nothing. A value outside the defs
@@ -334,9 +336,9 @@ D-087; sensors: `SENSORS` `stale_after_ms`), so a gap adds nothing. A value outs
 - `ride_bus_off_count` sums the increments of the cumulative counter between consecutive
   samples (the first sample is the baseline); a decrease means the node restarted and the new
   value is the increment. It reads `can_bus_off_count` of `telemetry.parquet`.
-  `ride_distance_gps` also needs `sensor.gps_fix_type` (declared input) next to the speed.
-  It currently integrates the GNSS ground speed without gating on the fix type (ISSUES E-26 (1),
-  pending a user decision); `/summary` shows the value exactly as the server computes it.
+  `ride_distance_gps` integrates the GNSS ground speed only over samples where the latest
+  `sensor.gps_fix_type` sample is usable and fresh by the same rule as `/track` (`gps_fix.py`);
+  a gap without a usable fix adds nothing, and a ride with no usable fix is `missing_inputs`.
 - Choices the defs leave open (assumptions of this reference): `ride_bus_off_count` counts
   only bus-offs seen within the session and treats a decrease as a restart; `ride_ltft_mean` is
   a sample mean and `ride_stft_std` a population standard deviation (each DID has a fixed poll
