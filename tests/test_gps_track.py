@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import math
 
 import pytest
@@ -108,6 +109,18 @@ def test_no_fix_and_stale_fix_are_excluded_and_counted():
     assert track.path_length_m == pytest.approx(2.0)
 
 
+def test_fix_type_values_are_looked_up_by_name_not_as_literals(monkeypatch: pytest.MonkeyPatch):
+    schema = copy.deepcopy(defs_ble.SCHEMA)
+    for entry in schema["gpsBlock"]["fixType"]["values"]:
+        entry["value"] = float(entry["value"]) + 100.0
+    monkeypatch.setattr(defs_ble, "SCHEMA", schema)
+    assert gps_track._usable_fix_values() == {
+        fix("fix2d") + 100.0,
+        fix("fix3d") + 100.0,
+        fix("gnssDeadReckoning") + 100.0,
+    }
+
+
 def test_fix_type_values_come_from_the_defs_enum_names():
     # The module must look the names up; a literal 2/3/4 would not follow a defs change.
     assert gps_track._usable_fix_values() == {
@@ -130,6 +143,23 @@ def test_low_speed_holds_the_last_trusted_heading():
     segment = track.segments[0]
     assert segment.x_m[-1] > 2.0
     assert all(abs(y) < 1e-9 for y in segment.y_m)
+
+
+def test_heading_trust_restarts_after_a_gap():
+    times = [0, 100, 2000, 2100]
+    track = gps_track.build_track(
+        series(times, [10.0, 10.0, 0.5, 10.0]),
+        series(times, [90.0, 90.0, 0.0, 90.0]),
+        series(times, [fix("fix3d")] * 4),
+        min_heading_speed_mps=1.0,
+    )
+    assert track.excluded["untrusted_heading"] == 1
+    assert track.segments_total == 2
+    first, second = track.segments
+    assert second.gap_before_ms == 2000
+    assert (second.x_m[0], second.y_m[0]) == (first.x_m[-1], first.y_m[-1])
+    assert second.x_m == [first.x_m[-1]]
+    assert second.y_m == [first.y_m[-1]]
 
 
 def test_no_segment_starts_before_the_first_trusted_heading():

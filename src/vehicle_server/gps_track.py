@@ -147,6 +147,7 @@ def _usable_samples(
     usable_values = _usable_fix_values()
     heading_stale = _sensor_stale_after_ms("gps_heading")
     fix_stale = _sensor_stale_after_ms("gps_fix_type")
+    speed_stale = _sensor_stale_after_ms("gps_ground_speed")
 
     excluded = {"no_fix": 0, "stale_fix": 0, "untrusted_heading": 0}
     samples: list[_Sample] = []
@@ -154,10 +155,12 @@ def _usable_samples(
     pending_break = False
 
     def exclude(kind: str) -> None:
-        nonlocal pending_break
+        nonlocal pending_break, last_heading
         excluded[kind] += 1
         if samples:
             pending_break = True
+            # A gap starts a new segment; its first trusted heading must be fresh.
+            last_heading = None
 
     for t, speed_mps in zip(speed.times, speed.values, strict=True):
         if not math.isfinite(speed_mps):
@@ -180,6 +183,11 @@ def _usable_samples(
         if not math.isfinite(heading_deg):
             exclude("untrusted_heading")
             continue
+
+        if samples and t - samples[-1].t > speed_stale:
+            # The next sample starts a new segment after a gap; do not carry the
+            # previous segment's heading into it.
+            last_heading = None
 
         if speed_mps < min_heading_speed_mps:
             if last_heading is None:
