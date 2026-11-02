@@ -10,6 +10,7 @@ from vehicle_server.derived.context import Feed, InputInvalid
 from vehicle_server.derived.formulas import FORMULAS
 from vehicle_server.derived.inputs import resolve_sensor
 from vehicle_server.derived.summary import NOT_IMPLEMENTED_REASONS, SUMMARIES, SummaryEnv
+from vehicle_server.gps_fix import fix_values_by_name, usable_fix_values
 
 from .derived_helpers import FakeInputs, const_series, ramp
 
@@ -82,7 +83,8 @@ def test_summaries_only_read_declared_inputs():
             elif kind == "derived":
                 results[key] = 1.0
             else:
-                times, values = const_series(0, 5000, 10, 1.0)
+                value = next(iter(usable_fix_values())) if inp == FIX else 1.0
+                times, values = const_series(0, 5000, 10, value)
                 feeds[inp] = Feed(times, values, 300)
         env = SummaryEnv(spec, feeds, outputs, results)
         try:
@@ -294,12 +296,42 @@ def test_coolant_rate_max_and_start_end_temperatures():
 
 
 def test_distance_gps_integrates_speed_and_adds_nothing_over_a_gap():
+    usable = next(iter(usable_fix_values()))
     times, values = const_series(0, 10000, 100, 10.0)  # 10 m/s for 10 s = 0.1 km
-    series = {SPEED_MPS: (times, values), FIX: (times, [3.0] * len(times))}
+    series = {SPEED_MPS: (times, values), FIX: (times, [usable] * len(times))}
     assert _scalar(_run(series), "ride_distance_gps") == (pytest.approx(0.1), None)
-    gap = {SPEED_MPS: ([0, 5000], [10.0, 10.0]), FIX: ([0, 5000], [3.0, 3.0])}
+    gap = {SPEED_MPS: ([0, 5000], [10.0, 10.0]), FIX: ([0, 5000], [usable, usable])}
     # held 300 ms (SENSORS stale_after_ms) at 10 m/s = 3 m
     assert _scalar(_run(gap), "ride_distance_gps") == (pytest.approx(0.003), None)
+
+
+def test_distance_gps_skips_a_no_fix_stretch_mid_ride():
+    usable = next(iter(usable_fix_values()))
+    unusable = next(v for v in fix_values_by_name().values() if v not in usable_fix_values())
+    times, values = const_series(0, 20000, 100, 10.0)  # 10 m/s for 20 s = 0.2 km
+    fix = [unusable if 5000 <= t < 15000 else usable for t in times]
+    result = _run({SPEED_MPS: (times, values), FIX: (times, fix)})
+    # the 10 s no-fix stretch contributes zero: half the full distance
+    assert _scalar(result, "ride_distance_gps") == (pytest.approx(0.1), None)
+
+
+def test_distance_gps_ignores_speed_samples_after_the_fix_type_goes_stale():
+    usable = next(iter(usable_fix_values()))
+    times, values = const_series(0, 10000, 100, 10.0)
+    fix_times = list(range(0, 2001, 100))
+    result = _run({SPEED_MPS: (times, values), FIX: (fix_times, [usable] * len(fix_times))})
+    # counted from 0 to 2000 ms plus the 300 ms fix freshness = 2.3 s at 10 m/s = 0.023 km
+    assert _scalar(result, "ride_distance_gps") == (pytest.approx(0.023), None)
+
+
+def test_distance_gps_with_no_usable_fix_is_missing_inputs():
+    unusable = next(v for v in fix_values_by_name().values() if v not in usable_fix_values())
+    times, values = const_series(0, 10000, 100, 10.0)
+    result = _run({SPEED_MPS: (times, values), FIX: (times, [unusable] * len(times))})
+    assert result.coverage["ride_distance_gps"] == {
+        "status": "missing_inputs",
+        "missing": [FIX],
+    }
 
 
 def test_bus_off_count_sums_increments_and_a_restart_restarts_from_the_new_value():

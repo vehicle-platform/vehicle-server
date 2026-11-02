@@ -7,6 +7,7 @@ import pytest
 from vehicle_server.defs import vehicle_derived
 from vehicle_server.derived import engine, summary
 from vehicle_server.derived.context import Feed
+from vehicle_server.gps_fix import usable_fix_values
 
 SPECS = vehicle_derived.SIGNALS
 
@@ -18,10 +19,6 @@ IMPLEMENTED = [
     and spec["ready_phase0"]
     and not spec.get("pending_inputs")
 ]
-
-# E-26 (1): these summaries declare an input but never read it; LR8-2 fixes them and removes
-# the marks. The marker is strict so a fixed signal fails until its mark is removed.
-KNOWN_OFFENDERS = {"ride_distance_gps"}
 
 
 class RecordingEnv(summary.SummaryEnv):
@@ -67,7 +64,8 @@ def _env(name: str) -> RecordingEnv:
         elif kind == "derived":
             results[key] = 1.0
         else:
-            feeds[inp] = Feed(times, [1.0] * len(times), 10_000)
+            value = next(iter(usable_fix_values())) if inp == "sensor.gps_fix_type" else 1.0
+            feeds[inp] = Feed(times, [value] * len(times), 10_000)
     return RecordingEnv(spec, feeds, outputs, results)
 
 
@@ -77,19 +75,7 @@ def declared_but_unread(name: str) -> set[str]:
     return set(env.inputs) - env.accessed
 
 
-def _case(name: str) -> pytest.ParameterSet:
-    marks = []
-    if name in KNOWN_OFFENDERS:
-        marks.append(
-            pytest.mark.xfail(
-                strict=True,
-                reason=f"E-26 (1): {name} declares an input it never reads; fixed in LR8-2",
-            )
-        )
-    return pytest.param(name, marks=marks)
-
-
-@pytest.mark.parametrize("name", [_case(name) for name in IMPLEMENTED])
+@pytest.mark.parametrize("name", IMPLEMENTED)
 def test_every_implemented_summary_reads_its_declared_inputs(name: str) -> None:
     unread = declared_but_unread(name)
     assert not unread, f"{name} declares but never reads {sorted(unread)}"

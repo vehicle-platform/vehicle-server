@@ -46,6 +46,7 @@ from vehicle_server.derived.engine import (
     dependency_order,
 )
 from vehicle_server.derived.formulas import FLAG_STANDSTILL, Outcome, hold_segments
+from vehicle_server.gps_fix import usable_fix_values
 
 # Unit conversions (not vehicle data).
 SECONDS_PER_HOUR = 3600.0
@@ -66,6 +67,7 @@ _STFT = "did.SHORT_TERM_FUEL_TRIM_B1"
 _COOLANT = "did.COOLANT_TEMP"
 _INTAKE = "did.INTAKE_AIR_TEMP"
 _GPS_SPEED = "sensor.gps_ground_speed"
+_GPS_FIX = "sensor.gps_fix_type"
 _BUS_OFF = "sensor.can_bus_off_count"
 _RTT_MAX = "sensor.tester_rtt_max"
 _STEP_GAP_MAX = "sensor.tester_step_gap_max"
@@ -145,6 +147,14 @@ NOT_IMPLEMENTED_REASONS.update(
         and not spec.get("pending_inputs")
     }
 )
+
+
+class MissingInputs(Exception):
+    """A declared input has no usable data here; reported as the existing missing_inputs."""
+
+    def __init__(self, inputs: list[str]):
+        super().__init__(", ".join(inputs))
+        self.inputs = inputs
 
 
 class SummaryEnv(Env):
@@ -373,9 +383,22 @@ def ride_start_intake_temp(env: SummaryEnv) -> Outcome:
 
 @_summary("ride_distance_gps")
 def ride_distance_gps(env: SummaryEnv) -> Outcome:
-    """Time integral of the GNSS ground speed, km (m/s divided by 1000 m/km per second).
-    Only fixed samples exist (inputs.py); speed only, never a position."""
-    return _integral(env, _GPS_SPEED, lambda speed: speed / M_PER_KM)
+    """Time integral of the GNSS ground speed, km (m/s divided by 1000 m/km per second),
+    counted only while the latest fix-type sample is usable and fresh by the /track rule.
+    A gap without a usable fix adds nothing; speed only, never a position. A ride with no
+    usable fix at all is missing_inputs, not 0.0."""
+    fix = env.feed(_GPS_FIX)
+    usable = usable_fix_values()
+    gated_values = [None if value is None or value not in usable else value for value in fix.values]
+    if not any(value is not None for value in gated_values):
+        raise MissingInputs([_GPS_FIX])
+    original = env.feeds[_GPS_FIX]
+    env.feeds[_GPS_FIX] = Feed(fix.times, gated_values, fix.stale_after_ms)
+    try:
+        _, held, spans = hold_segments(env, [_GPS_SPEED, _GPS_FIX])
+    finally:
+        env.feeds[_GPS_FIX] = original
+    return sum(speed / M_PER_KM * span for (speed, _), span in zip(held, spans, strict=True)), None
 
 
 @_summary("ride_bus_off_count")
@@ -535,6 +558,8 @@ def evaluate(
                     entries[name] = _summarize_one(
                         name, spec, summaries[name], env, result, results
                     )
+            except MissingInputs as exc:
+                entries[name] = {"status": MISSING_INPUTS, "missing": list(exc.inputs)}
             except Exception as exc:  # one failing summary must not stop the others
                 entries[name] = {"status": ERROR, "message": f"{type(exc).__name__}: {exc}"}
     result.coverage = {name: entries[name] for name in specs if name in entries}  # defs order
