@@ -46,19 +46,31 @@ def _entry_signals(block: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return signals
 
 
+def _read_report(session_dir: Path) -> dict[str, Any]:
+    try:
+        return json.loads((session_dir / "report.json").read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        raise NoRideSummary("session has no ride summary") from exc
+
+
+def _summary_block(report: dict[str, Any]) -> dict[str, Any]:
+    """The stored ``derived_summary`` block; NoRideSummary when it is missing or an error."""
+    block = report.get("derived_summary")
+    if not isinstance(block, dict):
+        raise NoRideSummary("session has no ride summary")
+    if "error" in block:
+        raise NoRideSummary(str(block["error"]))
+    return block
+
+
 def read_summary_block(session_dir: Path) -> dict[str, Any] | None:
     """The stored ``derived_summary`` block, or None when the report/file is missing or
     the block is an error. Used by /rides, which must keep walking past such sessions."""
     try:
-        report = json.loads((session_dir / "report.json").read_text())
-    except (OSError, json.JSONDecodeError):
+        block = _summary_block(_read_report(session_dir))
+    except NoRideSummary:
         return None
-    block = report.get("derived_summary")
-    if not isinstance(block, dict) or "error" in block:
-        return None
-    if not isinstance(block.get("records"), dict):
-        return None
-    return block
+    return block if isinstance(block.get("records"), dict) else None
 
 
 def _read_summary_rows(session_dir: Path) -> list[dict[str, Any]]:
@@ -183,11 +195,7 @@ def build_ride_summary(
     rows: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Build the /summary response from one stored report and summary rows."""
-    block = report.get("derived_summary")
-    if not isinstance(block, dict):
-        raise NoRideSummary("session has no ride summary")
-    if "error" in block:
-        raise NoRideSummary(str(block["error"]))
+    block = _summary_block(report)
     stored = _entry_signals(block)
     rows = rows or []
     signals: list[dict[str, Any]] = []
@@ -205,16 +213,8 @@ def build_ride_summary(
 
 def load_ride_summary(session_dir: Path, session_id: str) -> dict[str, Any]:
     """Read the stored files of one session and build the /summary response."""
-    try:
-        report = json.loads((session_dir / "report.json").read_text())
-    except (OSError, json.JSONDecodeError) as exc:
-        raise NoRideSummary("session has no ride summary") from exc
-    block = report.get("derived_summary")
-    if not isinstance(block, dict):
-        raise NoRideSummary("session has no ride summary")
-    if "error" in block:
-        raise NoRideSummary(str(block["error"]))
-    stored = _entry_signals(block)
+    report = _read_report(session_dir)
+    stored = _entry_signals(_summary_block(report))
     needs_rows = any(
         stored.get(name, {}).get("status") == "computed" and spec.get("bins")
         for name, spec in vehicle_derived.SIGNALS.items()
@@ -234,7 +234,7 @@ def scalar_names() -> list[str]:
 
 
 def select_scalar_names(names: str | None) -> list[str]:
-    """Validate the /rides `names` query parameter and return its defs order."""
+    """Validate the /rides `names` query parameter; the names keep their query order."""
     available = scalar_names()
     if names is None:
         return available
@@ -244,15 +244,11 @@ def select_scalar_names(names: str | None) -> list[str]:
     binned = [
         name
         for name in requested
-        if name in vehicle_derived.SIGNALS and vehicle_derived.SIGNALS[name].get("bins")
+        if name in vehicle_derived.SIGNALS
+        and vehicle_derived.SIGNALS[name]["class"] == "B"
+        and vehicle_derived.SIGNALS[name].get("bins")
     ]
-    unknown = [
-        name
-        for name in requested
-        if name not in vehicle_derived.SIGNALS
-        or vehicle_derived.SIGNALS[name]["class"] != "B"
-        or (name not in available and name not in binned)
-    ]
+    unknown = [name for name in requested if name not in available and name not in binned]
     if unknown:
         raise BadRideQuery(f"unknown class-B scalar names: {', '.join(unknown)}")
     if binned:
@@ -310,10 +306,10 @@ def build_rides(
     rows: list[dict[str, Any]] = []
     skipped = 0
     for session_id, created_utc, block in sessions:
-        if block is None:
-            skipped += 1
-            continue
         if not created_in_range(created_utc, start, end):
+            continue
+        if block is None:  # counted only inside the requested range
+            skipped += 1
             continue
         stored = _entry_signals(block)
         values: dict[str, float | None] = {}

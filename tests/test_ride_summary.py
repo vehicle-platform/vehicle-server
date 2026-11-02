@@ -448,3 +448,16 @@ def test_rides_missing_value_in_an_older_report_is_null_with_status(
     body = _get_rides(client, names="ride_distance,ride_time").json()
     assert body["rows"][0]["values"] == {"ride_distance": 1.0, "ride_time": None}
     assert body["rows"][0]["flags"] == {"ride_distance": None, "ride_time": "missing"}
+
+
+def test_rides_skipped_counts_only_sessions_inside_the_range():
+    block = {"records": {"r": {"signals": {}}}}
+    sessions = [
+        ("out-old", "2026-01-01T10:00:00+00:00", None),
+        ("in-new", "2026-02-01T10:00:00+00:00", None),
+        ("in-ok", "2026-02-02T10:00:00+00:00", block),
+    ]
+    start = ride_summary.parse_utc_bound("2026-02-01", end=False)
+    body = ride_summary.build_rides(sessions, [], start, None)
+    assert [row["session_id"] for row in body["rows"]] == ["in-ok"]
+    assert body["skipped"] == 1
