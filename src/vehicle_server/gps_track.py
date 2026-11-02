@@ -106,11 +106,13 @@ def series_stale_after_ms(name: str) -> int | None:
     """Freshness limit of a /series name, from defs; None when the defs give none.
 
     DIDs use their own stale_after_ms, sensors use SENSORS, derived signals use the
-    derived table's stale_after_ms or (when absent) three sample periods.
+    derived table's stale_after_ms or (when absent) three sample periods. A catalog DID the
+    vehicle's poll plan does not serve (a candidate) has no limit, so it is held.
     """
     kind, _, key = name.partition(".")
     if kind == "did":
-        return int(vehicle_cl250.DID_STALE_AFTER_MS[key])
+        limit = vehicle_cl250.DID_STALE_AFTER_MS.get(key)
+        return None if limit is None else int(limit)
     if kind == "sensor":
         return int(vehicle_derived.SENSORS[key]["stale_after_ms"])
     if kind == "derived":
@@ -203,16 +205,23 @@ def _usable_samples(
     return samples, excluded
 
 
-def _rdp_keep(xs: list[float], ys: list[float], tolerance_m: float) -> list[int]:
-    """Indices kept by Ramer-Douglas-Peucker (deterministic; first farthest point wins)."""
+def _rdp_significance(xs: list[float], ys: list[float]) -> list[float]:
+    """Squared RDP significance of every point (endpoints: infinity).
+
+    One full Ramer-Douglas-Peucker pass with tolerance 0 (deterministic; the first farthest
+    point wins). A point's significance is the smallest squared distance on its split chain,
+    so RDP at tolerance ``t`` keeps exactly the points whose significance exceeds ``t**2``:
+    the split order does not depend on the tolerance, only where the recursion stops. That
+    turns the max_points search into one pass and a sort instead of RDP per bisection step.
+    """
     n = len(xs)
-    if n <= 2:
-        return list(range(n))
-    keep = {0, n - 1}
-    stack = [(0, n - 1)]
-    tolerance_sq = tolerance_m * tolerance_m
+    significance = [0.0] * n
+    if n == 0:
+        return significance
+    significance[0] = significance[-1] = math.inf
+    stack = [(0, n - 1, math.inf)]
     while stack:
-        start, end = stack.pop()
+        start, end, parent = stack.pop()
         ax, ay = xs[start], ys[start]
         bx, by = xs[end], ys[end]
         dx, dy = bx - ax, by - ay
@@ -229,11 +238,12 @@ def _rdp_keep(xs: list[float], ys: list[float], tolerance_m: float) -> list[int]
             if distance_sq > farthest:
                 farthest = distance_sq
                 farthest_index = i
-        if farthest > tolerance_sq:
-            keep.add(farthest_index)
-            stack.append((start, farthest_index))
-            stack.append((farthest_index, end))
-    return sorted(keep)
+        if farthest > 0.0:
+            chain = min(parent, farthest)
+            significance[farthest_index] = chain
+            stack.append((start, farthest_index, chain))
+            stack.append((farthest_index, end, chain))
+    return significance
 
 
 def _build_segments_with_positions(
@@ -304,29 +314,12 @@ def simplify_segments(
             f"more than max_points={max_points}"
         )
 
-    def count(tolerance_m: float) -> int:
-        return sum(len(_rdp_keep(xs, ys, tolerance_m)) for xs, ys in positions)
-
-    if count(0.0) <= max_points:
-        tolerance = 0.0
-    else:
-        low = 0.0
-        high = max(
-            max((max(xs) - min(xs) for xs, _ in positions if xs), default=1.0),
-            max((max(ys) - min(ys) for _, ys in positions if ys), default=1.0),
-            1.0,
-        )
-        while count(high) > max_points:
-            high *= 2.0
-        for _ in range(60):
-            mid = (low + high) / 2.0
-            if count(mid) <= max_points:
-                high = mid
-            else:
-                low = mid
-        tolerance = high
-
-    kept = [_rdp_keep(xs, ys, tolerance) for xs, ys in positions]
+    significance = [_rdp_significance(xs, ys) for xs, ys in positions]
+    # The smallest tolerance whose RDP result fits: the (max_points + 1)-th largest
+    # significance. Ties at that value are all dropped, so the count stays <= max_points.
+    ranked = sorted((s for values in significance for s in values), reverse=True)
+    threshold = ranked[max_points] if len(ranked) > max_points else 0.0
+    kept = [[i for i, s in enumerate(values) if s > threshold] for values in significance]
     return kept, any(
         len(indices) < len(segment.samples) for segment, indices in zip(segments, kept, strict=True)
     )

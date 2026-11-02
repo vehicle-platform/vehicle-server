@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import copy
 import math
+import random
+import time
 
 import pytest
 
 from vehicle_server import gps_track
 from vehicle_server.defs import ble as defs_ble
+from vehicle_server.defs import vehicle_catalog, vehicle_cl250
 
 FIX = {
     entry["name"]: float(entry["value"])
@@ -198,6 +201,73 @@ def test_simplification_is_bounded_deterministic_and_keeps_endpoints_and_corner(
     assert segment.x_m[-1] == pytest.approx(199.70710678118655)
     assert segment.y_m[-1] == pytest.approx(199.70710678118655)
     assert any(x > 190.0 and y < 1.0 for x, y in zip(segment.x_m, segment.y_m, strict=True))
+
+
+def _reference_rdp(xs: list[float], ys: list[float], tolerance_m: float) -> list[int]:
+    """Textbook recursive RDP, kept here only to check the one-pass significance."""
+
+    def keep(start: int, end: int) -> list[int]:
+        ax, ay, bx, by = xs[start], ys[start], xs[end], ys[end]
+        dx, dy = bx - ax, by - ay
+        denominator = dx * dx + dy * dy
+        best, best_i = -1.0, -1
+        for i in range(start + 1, end):
+            if denominator == 0.0:
+                d = (xs[i] - ax) ** 2 + (ys[i] - ay) ** 2
+            else:
+                d = ((xs[i] - ax) * dy - (ys[i] - ay) * dx) ** 2 / denominator
+            if d > best:
+                best, best_i = d, i
+        if best > tolerance_m * tolerance_m:
+            return keep(start, best_i)[:-1] + keep(best_i, end)
+        return [start, end]
+
+    return keep(0, len(xs) - 1) if len(xs) > 1 else list(range(len(xs)))
+
+
+@pytest.mark.parametrize("tolerance_m", [0.0, 0.05, 0.5, 2.0, 20.0])
+def test_significance_threshold_equals_rdp_at_that_tolerance(tolerance_m: float):
+    # A wobbly synthetic path: random walk of headings, fixed seed.
+    rng = random.Random(7)
+    xs, ys, heading = [0.0], [0.0], 0.0
+    for _ in range(300):
+        heading += rng.gauss(0.0, 0.3)
+        xs.append(xs[-1] + math.sin(heading))
+        ys.append(ys[-1] + math.cos(heading))
+    significance = gps_track._rdp_significance(xs, ys)
+    kept = [i for i, s in enumerate(significance) if s > tolerance_m * tolerance_m]
+    assert kept == _reference_rdp(xs, ys, tolerance_m)
+
+
+def test_simplification_of_a_long_ride_is_fast():
+    # One hour at 10 Hz: the max_points search must not rerun RDP per bisection step.
+    rng = random.Random(1)
+    steps = 36000
+    times = [i * 100 for i in range(steps)]
+    headings, heading = [], 0.0
+    for _ in range(steps):
+        heading = (heading + rng.gauss(0.0, 2.0)) % 360.0
+        headings.append(heading)
+    start = time.perf_counter()
+    track = gps_track.build_track(
+        series(times, [10.0] * steps),
+        series(times, headings),
+        series(times, [fix("fix3d")] * steps),
+        max_points=2000,
+    )
+    assert time.perf_counter() - start < 2.0
+    assert sum(len(segment.t_ms) for segment in track.segments) <= 2000
+
+
+def test_a_candidate_did_without_a_poll_limit_is_held():
+    candidate = next(
+        name for name in vehicle_catalog.SIGNALS if name not in vehicle_cl250.DID_STALE_AFTER_MS
+    )
+    assert gps_track.series_stale_after_ms(f"did.{candidate}") is None
+    served = next(iter(vehicle_cl250.DID_STALE_AFTER_MS))
+    assert gps_track.series_stale_after_ms(f"did.{served}") == int(
+        vehicle_cl250.DID_STALE_AFTER_MS[served]
+    )
 
 
 def test_too_many_segments_for_max_points_raises():
