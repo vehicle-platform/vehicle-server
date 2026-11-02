@@ -20,7 +20,7 @@ from fastapi import Depends, FastAPI, HTTPException, Query, Request, UploadFile,
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, PlainTextResponse
 
-from vehicle_server import __version__, gps_track, index, report, series, stream
+from vehicle_server import __version__, gps_track, index, report, ride_summary, series, stream
 from vehicle_server.config import Settings, load_settings
 from vehicle_server.ingest import (
     SESSION_ID_RE,
@@ -233,6 +233,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             ),
             "segments": segments,
         }
+
+    @app.get("/sessions/{session_id}/summary", dependencies=[AuthDep])
+    def get_session_summary(session_id: str, settings: SettingsDep) -> dict:
+        session_dir = settings.sessions_dir / session_id
+        if not SESSION_ID_RE.match(session_id) or not session_dir.is_dir():
+            raise HTTPException(status_code=404, detail=f"unknown session: {session_id}")
+        try:
+            return ride_summary.load_ride_summary(session_dir, session_id)
+        except ride_summary.NoRideSummary as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     @app.get("/sessions/{session_id}/stats", dependencies=[AuthDep])
     def get_session_stats(
