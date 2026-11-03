@@ -36,10 +36,12 @@ def gps_session_id(settings: Settings, fixtures_dir: Path) -> str:
 def test_track_path_length_agrees_with_ride_distance_gps_on_a_stored_session(
     settings: Settings, client: TestClient, gps_session_id: str
 ):
-    # Both /track and the summary now use the same usable/fresh fix rule. The summary holds
-    # the speed between samples (including the last sample's freshness tail), while /track
-    # uses trapezoids between speed samples, so the summary is 0.00111165 km longer on this
-    # short fixture; both remain far inside the defs 0.01 km resolution.
+    # Both /track and the summary use the same usable/fresh fix rule (D-095). The summary
+    # follows the hold rule of formulas.hold_segments: its breakpoints are the union of the
+    # speed and fix-type sample times, so the last speed sample (9700 ms) is held up to the
+    # fix-type sample at 9800 ms while still fresh (11.3 m/s * 0.1 s = 1.13 m). /track ends
+    # at the last speed sample and uses trapezoids, so the summary is 0.00111165 km longer
+    # on this short fixture; both stay far inside the defs 0.01 km resolution.
     result = summary.evaluate(SessionInputs(settings.sessions_dir / gps_session_id), Evaluation())
     distance_km = result.coverage["ride_distance_gps"]["value"]
     track = client.get(f"/sessions/{gps_session_id}/track", headers=AUTH).json()

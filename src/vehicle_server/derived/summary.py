@@ -15,7 +15,9 @@ formulas.hold_segments: a value is held between samples but never beyond the inp
 freshness, so a gap adds nothing. The freshness limit of a did.* input of a class-B signal
 (no stale_after_ms of its own) is the DID's own stale_after_ms (D-087); sensors use SENSORS.
 Statuses are those of the engine; every value outside the defs `range` is null with the flag
-"out_of_range" (each cell too). Only declared inputs may be read (tests check this).
+"out_of_range" (each cell too). Only declared inputs may be read, and every declared input
+must be read (D-095; tests check both). A summary whose declared input has no usable data
+raises MissingInputs, reported as the engine's missing_inputs status.
 """
 
 from __future__ import annotations
@@ -389,15 +391,13 @@ def ride_distance_gps(env: SummaryEnv) -> Outcome:
     usable fix at all is missing_inputs, not 0.0."""
     fix = env.feed(_GPS_FIX)
     usable = usable_fix_values()
-    gated_values = [None if value is None or value not in usable else value for value in fix.values]
-    if not any(value is not None for value in gated_values):
+    gated = [value if value in usable else None for value in fix.values]
+    if all(value is None for value in gated):
         raise MissingInputs([_GPS_FIX])
-    original = env.feeds[_GPS_FIX]
-    env.feeds[_GPS_FIX] = Feed(fix.times, gated_values, fix.stale_after_ms)
-    try:
-        _, held, spans = hold_segments(env, [_GPS_SPEED, _GPS_FIX])
-    finally:
-        env.feeds[_GPS_FIX] = original
+    # An unusable fix type reads as an invalid sample, so hold_segments drops the stretch;
+    # the shared env stays untouched.
+    feeds = {_GPS_SPEED: env.feed(_GPS_SPEED), _GPS_FIX: Feed(fix.times, gated, fix.stale_after_ms)}
+    _, held, spans = hold_segments(Env(list(feeds), feeds, None), list(feeds))
     return sum(speed / M_PER_KM * span for (speed, _), span in zip(held, spans, strict=True)), None
 
 
