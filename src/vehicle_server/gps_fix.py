@@ -1,16 +1,16 @@
-"""The GNSS fix usability rule shared by /track and the class-B GNSS distance (D-060).
+"""The GNSS fix usability rule shared by /track and the class-B GNSS distance (D-060, D-099).
 
 The fix-type enum names and values come from the BLE schema; this module holds no vehicle
-facts of its own. A fix is usable when its defs enum name is fix2d, fix3d or
-gnssDeadReckoning, and only while the latest fix-type sample is fresh by its
-``stale_after_ms``.
+facts of its own. A fix is usable when its defs enum name is fix3d or gnssDeadReckoning
+(D-099: the set of the D-060 item 4 speed check; a 2D fix does not count), and only
+while the latest fix-type sample is fresh by its ``stale_after_ms``.
 """
 
 from __future__ import annotations
 
 from vehicle_server.defs import ble as defs_ble
 
-USABLE_FIX_NAMES = ("fix2d", "fix3d", "gnssDeadReckoning")
+USABLE_FIX_NAMES = ("fix3d", "gnssDeadReckoning")
 
 
 def fix_values_by_name() -> dict[str, float]:
