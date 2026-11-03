@@ -15,7 +15,7 @@ organization; see `vehicle-defs/docs/ARCHITECTURE.md` for the platform picture.
 ## Setup
 
 ```bash
-git submodule update --init --recursive   # external/vehicle-defs, pinned to v0.19.0
+git submodule update --init --recursive   # external/vehicle-defs, pinned to v0.22.0
 uv sync                                    # installs runtime + dev dependencies
 ```
 
@@ -80,7 +80,7 @@ top-level folder -- see the session contract the phone app writes to.
 Example `/sessions/{id}/summary` response (one scalar, one binned signal; other signals elided):
 
 ```json
-{"session_id": "20260115-120000-abcd", "ride_definition": "session", "defs_version": "v0.19.1",
+{"session_id": "20260115-120000-abcd", "ride_definition": "session", "defs_version": "v0.22.0",
  "signals": [
    {"name": "ride_distance", "status": "computed", "unit": "km", "range": [0.0, 2000.0],
     "kind": "scalar", "value": 12.3, "flag": null},
@@ -385,7 +385,7 @@ vehicle-rt-core host tests:
 uv run vehicle-server golden --out <vehicle-rt-core>/tests/host/vectors   # also python -m vehicle_server.derived.golden
 ```
 
-- Defs version: the headers record the defs version they were generated from (v0.19.0 now).
+- Defs version: the headers record the defs version they were generated from (v0.22.0 now).
   The expected outputs use that version's derived `stale_after_ms` (the age limit of a
   derived input; a DID input uses the DID's own limit, D-070), which changed in v0.14.0, so rt-core's derived-module test needs a
   defs pin with the same derived table (v0.14.0 or later); against v0.13.0 the torque and
@@ -429,6 +429,29 @@ as class A; tolerance = resolution / 2.
   scope of 2a), signals with a `sensor.*` input (ride_distance_gps, ride_bus_off_count,
   ride_tester_rtt_max, ride_tester_step_gap_max) and every class-B signal without a summary in the
   reference. No GPS name appears in any file (asserted).
+
+### Ride-summary records (D-098, C3 part 2b)
+
+`src/vehicle_server/ride_record.py` is the raw encoder (and decoder) of the ride-summary record
+DIDs 0xFD40-0xFD4E (0xFD42 not served in v1). The layout comes from the defs codegen
+(`vehicle_defs.uds.RIDE_RECORDS`, the same run that writes rt-core's `platform_uds_ride_fields[]`):
+4-byte header (layout version, big-endian stop-epoch counter of the closed ride, bit 0
+`RIDE_CLOSED`), then big-endian unsigned fields `raw = round_half_even((value - range_min) /
+resolution)`, computed in float32 like rt-core's writer (`lrintf`, never `roundf`). The all-ones
+value of a field is NOT_AVAILABLE: missing, not finite, or a rounded raw value outside
+`0..raw_max` (never clamped). With no ride closed every field is NOT_AVAILABLE.
+
+The golden command also writes `derived_ride_records.h` (`derived/golden_records.py`):
+
+- `derived_ride_field_vectors[]`: per row of `platform_uds_ride_fields[]` (order checked against
+  the generated `platform_uds.c`) the raw value of range_min, the largest valid value, one
+  resolution above and below the range, a missing value and the exact float32 ties 2.5 -> 2 and
+  3.5 -> 4 where they exist. Tests the generic writer alone.
+- `derived_no_ride_records[]`: every served record before any ride closed (counter 0).
+- `derived_<scenario>_ride_records[]`: per ride of each class-B scenario, the encoding of the
+  expected closed values of `derived_<scenario>_b.h` (other fields NOT_AVAILABLE), counter =
+  ride + 1 (the epoch counter the ride test drives). Exact when the writer is fed those values;
+  end to end a field may differ by one raw step (value tolerance resolution / 2).
 
 ## Development
 
