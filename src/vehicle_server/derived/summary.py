@@ -15,7 +15,9 @@ formulas.hold_segments: a value is held between samples but never beyond the inp
 freshness, so a gap adds nothing. The freshness limit of a did.* input of a class-B signal
 (no stale_after_ms of its own) is the DID's own stale_after_ms (D-087); sensors use SENSORS.
 Statuses are those of the engine; every value outside the defs `range` is null with the flag
-"out_of_range" (each cell too). Only declared inputs may be read (tests check this).
+"out_of_range" (each cell too). Only declared inputs may be read, and every declared input
+must be read (D-095; tests check both). A summary whose declared input has no usable data
+raises MissingInputs, reported as the engine's missing_inputs status.
 """
 
 from __future__ import annotations
@@ -46,6 +48,7 @@ from vehicle_server.derived.engine import (
     dependency_order,
 )
 from vehicle_server.derived.formulas import FLAG_STANDSTILL, Outcome, hold_segments
+from vehicle_server.gps_fix import usable_fix_values
 
 # Unit conversions (not vehicle data).
 SECONDS_PER_HOUR = 3600.0
@@ -66,6 +69,7 @@ _STFT = "did.SHORT_TERM_FUEL_TRIM_B1"
 _COOLANT = "did.COOLANT_TEMP"
 _INTAKE = "did.INTAKE_AIR_TEMP"
 _GPS_SPEED = "sensor.gps_ground_speed"
+_GPS_FIX = "sensor.gps_fix_type"
 _BUS_OFF = "sensor.can_bus_off_count"
 _RTT_MAX = "sensor.tester_rtt_max"
 _STEP_GAP_MAX = "sensor.tester_step_gap_max"
@@ -145,6 +149,14 @@ NOT_IMPLEMENTED_REASONS.update(
         and not spec.get("pending_inputs")
     }
 )
+
+
+class MissingInputs(Exception):
+    """A declared input has no usable data here; reported as the existing missing_inputs."""
+
+    def __init__(self, inputs: list[str]):
+        super().__init__(", ".join(inputs))
+        self.inputs = inputs
 
 
 class SummaryEnv(Env):
@@ -373,9 +385,20 @@ def ride_start_intake_temp(env: SummaryEnv) -> Outcome:
 
 @_summary("ride_distance_gps")
 def ride_distance_gps(env: SummaryEnv) -> Outcome:
-    """Time integral of the GNSS ground speed, km (m/s divided by 1000 m/km per second).
-    Only fixed samples exist (inputs.py); speed only, never a position."""
-    return _integral(env, _GPS_SPEED, lambda speed: speed / M_PER_KM)
+    """Time integral of the GNSS ground speed, km (m/s divided by 1000 m/km per second),
+    counted only while the latest fix-type sample is usable and fresh by the /track rule.
+    A gap without a usable fix adds nothing; speed only, never a position. A ride with no
+    usable fix at all is missing_inputs, not 0.0."""
+    fix = env.feed(_GPS_FIX)
+    usable = usable_fix_values()
+    gated = [value if value in usable else None for value in fix.values]
+    if all(value is None for value in gated):
+        raise MissingInputs([_GPS_FIX])
+    # An unusable fix type reads as an invalid sample, so hold_segments drops the stretch;
+    # the shared env stays untouched.
+    feeds = {_GPS_SPEED: env.feed(_GPS_SPEED), _GPS_FIX: Feed(fix.times, gated, fix.stale_after_ms)}
+    _, held, spans = hold_segments(Env(list(feeds), feeds, None), list(feeds))
+    return sum(speed / M_PER_KM * span for (speed, _), span in zip(held, spans, strict=True)), None
 
 
 @_summary("ride_bus_off_count")
@@ -535,6 +558,8 @@ def evaluate(
                     entries[name] = _summarize_one(
                         name, spec, summaries[name], env, result, results
                     )
+            except MissingInputs as exc:
+                entries[name] = {"status": MISSING_INPUTS, "missing": list(exc.inputs)}
             except Exception as exc:  # one failing summary must not stop the others
                 entries[name] = {"status": ERROR, "message": f"{type(exc).__name__}: {exc}"}
     result.coverage = {name: entries[name] for name in specs if name in entries}  # defs order

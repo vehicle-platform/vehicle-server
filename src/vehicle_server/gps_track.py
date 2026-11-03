@@ -24,8 +24,9 @@ import bisect
 import math
 from dataclasses import dataclass
 
-from vehicle_server.defs import ble as defs_ble
 from vehicle_server.defs import vehicle_cl250, vehicle_derived
+from vehicle_server.gps_fix import USABLE_FIX_NAMES as USABLE_FIX_NAMES
+from vehicle_server.gps_fix import usable_fix_values as _usable_fix_values
 
 DEFAULT_MAX_POINTS = 2000
 MIN_MAX_POINTS = 10
@@ -33,8 +34,6 @@ MAX_MAX_POINTS = 20000
 DEFAULT_MIN_HEADING_SPEED_MPS = 1.0
 MIN_HEADING_SPEED_MPS = 0.0
 MAX_HEADING_SPEED_MPS = 10.0
-
-USABLE_FIX_NAMES = ("fix2d", "fix3d", "gnssDeadReckoning")
 
 
 class TrackTooManyPoints(ValueError):
@@ -83,19 +82,6 @@ class _Sample:
 class _Segment:
     samples: list[_Sample]
     gap_before_ms: int | None
-
-
-def _fix_values_by_name() -> dict[str, float]:
-    gps = defs_ble.SCHEMA["gpsBlock"]
-    return {entry["name"]: float(entry["value"]) for entry in gps["fixType"]["values"]}
-
-
-def _usable_fix_values() -> frozenset[float]:
-    by_name = _fix_values_by_name()
-    missing = [name for name in USABLE_FIX_NAMES if name not in by_name]
-    if missing:
-        raise ValueError(f"gps fixType enum has no {', '.join(missing)}")
-    return frozenset(by_name[name] for name in USABLE_FIX_NAMES)
 
 
 def _sensor_stale_after_ms(name: str) -> int:

@@ -36,17 +36,18 @@ def gps_session_id(settings: Settings, fixtures_dir: Path) -> str:
 def test_track_path_length_agrees_with_ride_distance_gps_on_a_stored_session(
     settings: Settings, client: TestClient, gps_session_id: str
 ):
-    # TR-3 finding: derived.ride_distance_gps is implemented. Its _integral holds the
-    # speed between speed samples, while /track uses the speed trapezoid; both use the
-    # same gnssFixOk-filtered speed samples (the declared fix-type input is not read by
-    # the summary). The only expected difference is the trapezoid endpoint correction:
-    # 0.01835 m = 0.00001835 km on this fixture, far inside the defs 0.01 km resolution.
+    # Both /track and the summary use the same usable/fresh fix rule (D-095). The summary
+    # follows the hold rule of formulas.hold_segments: its breakpoints are the union of the
+    # speed and fix-type sample times, so the last speed sample (9700 ms) is held up to the
+    # fix-type sample at 9800 ms while still fresh (11.3 m/s * 0.1 s = 1.13 m). /track ends
+    # at the last speed sample and uses trapezoids, so the summary is 0.00111165 km longer
+    # on this short fixture; both stay far inside the defs 0.01 km resolution.
     result = summary.evaluate(SessionInputs(settings.sessions_dir / gps_session_id), Evaluation())
     distance_km = result.coverage["ride_distance_gps"]["value"]
     track = client.get(f"/sessions/{gps_session_id}/track", headers=AUTH).json()
     track_km = track["path_length_m"] / 1000.0
-    assert distance_km == pytest.approx(0.0055783)
-    assert track_km - distance_km == pytest.approx(0.00001835, abs=1e-7)
+    assert distance_km == pytest.approx(0.0067083, abs=1e-6)
+    assert track_km - distance_km == pytest.approx(-0.00111165, abs=1e-6)
     assert abs(track_km - distance_km) <= 0.01
 
 
