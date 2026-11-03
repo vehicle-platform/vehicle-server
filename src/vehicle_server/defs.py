@@ -27,6 +27,7 @@ try:
     import vehicle_defs  # noqa: E402
     from vehicle_defs import (  # noqa: E402
         ble,
+        uds,
         vehicle_catalog,
         vehicle_cl250,
         vehicle_constants,
@@ -72,6 +73,7 @@ def defs_version() -> str:
 __all__ = [
     "vehicle_defs",
     "ble",
+    "uds",
     "vehicle_catalog",
     "vehicle_cl250",
     "vehicle_constants",

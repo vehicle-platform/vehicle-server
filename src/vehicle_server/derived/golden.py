@@ -664,10 +664,12 @@ def generate() -> Generation:
     never = [s for s, per in coverage.items() if not any(per.values())]
     if never:
         raise RuntimeError(f"selected signals never valid in any scenario: {never}")
-    from vehicle_server.derived import golden_b  # class B extends this module (lazy: no cycle)
+    # class B and the D-098 records extend this module (lazy imports: no cycle)
+    from vehicle_server.derived import golden_b, golden_records
 
     class_b = golden_b.generate_b()
     files += class_b.files
+    files.append(golden_records.generate_records(class_b))
     return Generation(files, list(selected), coverage, stats, class_b)
 
 
