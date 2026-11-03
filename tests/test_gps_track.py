@@ -118,7 +118,6 @@ def test_fix_type_values_are_looked_up_by_name_not_as_literals(monkeypatch: pyte
         entry["value"] = float(entry["value"]) + 100.0
     monkeypatch.setattr(defs_ble, "SCHEMA", schema)
     assert gps_track._usable_fix_values() == {
-        fix("fix2d") + 100.0,
         fix("fix3d") + 100.0,
         fix("gnssDeadReckoning") + 100.0,
     }
@@ -127,11 +126,12 @@ def test_fix_type_values_are_looked_up_by_name_not_as_literals(monkeypatch: pyte
 def test_fix_type_values_come_from_the_defs_enum_names():
     # The module must look the names up; a literal 2/3/4 would not follow a defs change.
     assert gps_track._usable_fix_values() == {
-        fix("fix2d"),
         fix("fix3d"),
         fix("gnssDeadReckoning"),
     }
     assert fix("noFix") not in gps_track._usable_fix_values()
+    # D-099: a 2D fix does not count, like the D-060 item 4 speed check.
+    assert fix("fix2d") not in gps_track._usable_fix_values()
 
 
 def test_low_speed_holds_the_last_trusted_heading():

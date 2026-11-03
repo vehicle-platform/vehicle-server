@@ -337,7 +337,8 @@ D-087; sensors: `SENSORS` `stale_after_ms`), so a gap adds nothing. A value outs
   samples (the first sample is the baseline); a decrease means the node restarted and the new
   value is the increment. It reads `can_bus_off_count` of `telemetry.parquet`.
   `ride_distance_gps` integrates the GNSS ground speed only over samples where the latest
-  `sensor.gps_fix_type` sample is usable and fresh by the same rule as `/track` (`gps_fix.py`);
+  `sensor.gps_fix_type` sample is usable (fix3d or gnssDeadReckoning, D-099: no 2D fix) and fresh
+  by the same rule as `/track` (`gps_fix.py`);
   a gap without a usable fix adds nothing, and a ride with no usable fix is `missing_inputs`.
 - Choices the defs leave open (assumptions of this reference): `ride_bus_off_count` counts
   only bus-offs seen within the session and treats a decrease as a restart; `ride_ltft_mean` is

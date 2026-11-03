@@ -6,8 +6,8 @@ in metres relative to the first usable sample. It never reads or produces a posi
 
 The rules (the same ones the /track endpoint and its README row document):
 
-* a sample is usable only with a fix type whose defs enum name is fix2d, fix3d or
-  gnssDeadReckoning, and only while the latest fix-type sample is fresh;
+* a sample is usable only with a fix type whose defs enum name is fix3d or
+  gnssDeadReckoning (D-099, no 2D fix), and only while the latest fix-type sample is fresh;
 * below ``min_heading_speed_mps`` the heading of motion is noise, so the last trusted
   heading is held; a segment does not start before the first trusted heading;
 * between two usable samples the distance is the speed trapezoid and the direction is the
