@@ -105,35 +105,21 @@ def _input_not_implemented(name: str) -> str:
 
 
 # Reason of every class-B signal that has no summary yet (the README lists them too).
+_COAST_DOWN_REASON = "definition: coast-down speed band not defined (D-103 gave none)"
 NOT_IMPLEMENTED_REASONS: dict[str, str] = {
-    "ride_warmup_time": "threshold: operating coolant temperature",
-    "ride_thermal_cycle_count": "threshold: cold/hot coolant temperatures",
-    "ride_fan_on_temperature": "threshold: fan voltage step",
-    "throttle_torque_lag": "definition: throttle step and lag search range",
-    "ride_final_drive_ratio": "threshold: steady cruise",
-    "speedometer_error": "threshold: steady speed and GNSS accuracy",
-    "effective_tyre_radius": "threshold: steady speed and GNSS accuracy",
-    "ride_aggressiveness_score": "definition: score weights",
-    "ride_cornering_aggressiveness": "definition: score weights",
-    "ride_can_error_count": "definition: TEC/REC are levels, not error counts",
-    "ride_unanswered_did_count": (
-        "definition: sensor (DIDs not answered) and BLE field (timed-out requests) differ"
+    "ride_fan_on_temperature": (
+        "definition: the rule needs a steady-RPM condition; ENGINE_SPEED is not a declared input "
+        "and no steady-RPM threshold exists"
+    ),
+    "ride_final_drive_ratio": (
+        "definition: turning the measured ratio into a final-drive ratio needs the nominal gear "
+        "ratios (const.gear_ratio_N are not declared inputs)"
     ),
     "ride_tester_nrc78_count": (
-        "definition: BLE rttNrc78Count belongs to the rotating rttDid record"
+        "definition: the rule sums per rttDid, rttDid is not a declared input"
     ),
-    "ride_heat_soak_max": _input_not_implemented("heat_soak_delta"),
-    "ride_cranking_dip": _input_not_implemented("cranking_dip"),
-    "ride_rest_voltage": _input_not_implemented("battery_rest_voltage"),
-    "ride_cold_abuse_time": _input_not_implemented("cold_engine_abuse"),
-    "ride_over_rev_time": _input_not_implemented("over_rev"),
-    "ride_lugging_time": _input_not_implemented("lugging"),
-    "ride_idle_rpm_std": _input_not_implemented("idle_rpm_std"),
-    "ride_idle_rpm_drift": _input_not_implemented("idle_rpm_drift"),
-    "ride_shift_count": _input_not_implemented("shift_event"),
-    "ride_launch_count": _input_not_implemented("launch_event"),
-    "coast_down_cda": _input_not_implemented("clutch_state"),
-    "coast_down_rolling_resistance": _input_not_implemented("clutch_state"),
+    "coast_down_cda": _COAST_DOWN_REASON,
+    "coast_down_rolling_resistance": _COAST_DOWN_REASON,
 }
 
 # D-079 health-window signals (defs v0.16.0): each reports one window instance (`window` key in
@@ -188,6 +174,11 @@ class SummaryEnv(Env):
     def result(self, name: str) -> float | None:
         """Scalar result of a declared class-B input (None = invalid)."""
         return self._results[self._declared(name)]
+
+    def rows(self, name: str) -> tuple[list[int], list[float | None]]:
+        """(times, values) of a declared class-A input, invalid rows (None) included."""
+        output = self._outputs[self._declared(name)]
+        return output.times, output.values
 
     def samples(self, name: str) -> list[float]:
         """All samples (time order) of a declared did.* / sensor.* input."""
@@ -564,3 +555,7 @@ def evaluate(
                 entries[name] = {"status": ERROR, "message": f"{type(exc).__name__}: {exc}"}
     result.coverage = {name: entries[name] for name in specs if name in entries}  # defs order
     return result
+
+
+# The D-103 summaries register themselves in SUMMARIES; the module needs the registry above.
+from vehicle_server.derived import d103_summaries  # noqa: E402, F401

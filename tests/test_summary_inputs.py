@@ -6,7 +6,7 @@ import pytest
 
 from vehicle_server.defs import vehicle_derived
 from vehicle_server.derived import engine, summary
-from vehicle_server.derived.context import Feed
+from vehicle_server.derived.context import Feed, InputInvalid
 from vehicle_server.gps_fix import usable_fix_values
 
 SPECS = vehicle_derived.SIGNALS
@@ -35,6 +35,10 @@ class RecordingEnv(summary.SummaryEnv):
     def result(self, name: str) -> float | None:
         self.accessed.add(name)
         return super().result(name)
+
+    def rows(self, name: str):
+        self.accessed.add(name)
+        return super().rows(name)
 
     def samples(self, name: str) -> list[float]:
         self.accessed.add(name)
@@ -71,7 +75,10 @@ def _env(name: str) -> RecordingEnv:
 
 def declared_but_unread(name: str) -> set[str]:
     env = _env(name)
-    summary.SUMMARIES[name].fn(env)
+    try:
+        summary.SUMMARIES[name].fn(env)
+    except InputInvalid:
+        pass  # the synthetic data may not satisfy a rule; every input must be read before that
     return set(env.inputs) - env.accessed
 
 
