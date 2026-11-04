@@ -54,3 +54,33 @@ def env_for(signal: str, feeds: dict[str, Samples]) -> Env:
 def point_value(signal: str, feeds: dict[str, Samples], t: int) -> float:
     """Evaluates one point formula at time t over hand-made feeds."""
     return FORMULAS[signal].fn(At(env_for(signal, feeds), t))
+
+
+def patch_const(monkeypatch, name: str, value: float) -> None:
+    """Makes the constant accessor return `value` for const.<name> (the defs stay untouched)."""
+    from vehicle_server.defs import vehicle_constants
+
+    old = vehicle_constants.CONSTANTS[name]
+    monkeypatch.setitem(vehicle_constants.CONSTANTS, name, (value, *old[1:]))
+
+
+def outcome(signal: str, feeds: dict[str, Samples], t: int) -> tuple[float | None, str | None]:
+    """(value, None) or (None, flag) of one point formula at t, as the engine records it."""
+    from vehicle_server.derived.context import InputInvalid
+
+    try:
+        return point_value(signal, feeds, t), None
+    except InputInvalid as exc:
+        return None, exc.flag
+
+
+def event_rows(
+    signal: str, feeds: dict[str, Samples]
+) -> list[tuple[int, float | None, str | None]]:
+    """The rows of an event formula over hand-made feeds."""
+    return FORMULAS[signal].fn(env_for(signal, feeds))
+
+
+def series_outcomes(signal: str, feeds: dict[str, Samples], grid: list[int]):
+    """The outcomes of a series formula over hand-made feeds."""
+    return FORMULAS[signal].fn(env_for(signal, feeds), grid)

@@ -585,3 +585,7 @@ def stop_event(env: Env) -> list[EventRow]:
                 start = t
         moving = v > 0
     return events
+
+
+# The D-103 signals register themselves in FORMULAS; the modules need the registries above.
+from vehicle_server.derived import d103_states  # noqa: E402, F401

@@ -31,6 +31,7 @@ from vehicle_server.derived.context import (
     Feed,
     InputInvalid,
 )
+from vehicle_server.derived.d103_common import NOT_IMPLEMENTED_REASONS_A
 from vehicle_server.derived.formulas import FORMULAS, Formula
 from vehicle_server.derived.inputs import Series
 
@@ -112,7 +113,8 @@ def _pre_status(
         reason = "ready_phase0" if not spec.get("ready_phase0", False) else "pending_inputs"
         return {**entry, "status": NOT_READY, "reason": reason, "pending_inputs": pending}
     if name not in formulas:
-        reason = "event" if spec.get("event") else "no formula"
+        default = "event" if spec.get("event") else "no formula"
+        reason = NOT_IMPLEMENTED_REASONS_A.get(name, default)
         return {**entry, "status": NOT_IMPLEMENTED, "reason": reason}
     return None
 
