@@ -298,7 +298,7 @@ C across rides, D server only). Until rt-core exists the Python reference in
   defs `range` null with `out_of_range`. `window_ms` is the least-squares slope window
   (`vehicle_accel`, `vehicle_jerk`) or the moving-average window (`yaw_rate`,
   `accel_imu_residual`).
-- `formulas.py`: 34 class-A signals, from vehicle-data-catalog section 5 (and each signal's
+- `formulas.py`: 34 class-A signals (and 21 D-103 signals in `d103_*.py`, below), from vehicle-data-catalog section 5 (and each signal's
   defs description): part 1 (19, below) and part 2 (fuel economy, trims and throttle/pedal
   residuals, `altitude_change`, `road_grade`, `coolant_rate`, `oil_temp_rate`,
   `lean_crosscheck_residual`, `stop_event`). Assumptions: the ECU speed is km/h and integer; the
@@ -324,8 +324,25 @@ C across rides, D server only). Until rt-core exists the Python reference in
   0 with RPM above 0 and ends at the first later speed above 0 (value = seconds, row time =
   the end); a gap in the speed samples above the speed DID's own `stale_after_ms` (D-087) or a stop still open at
   the end gives no event. The range check applies to events too.
-- Not computed (`not_implemented`): the other events, the other class-A signals without a
-  formula (missing thresholds or constants), and class B/C/D; signals with `ready_phase0:
+- D-103 (vehicle-defs v0.23.0): 21 more class-A signals in `d103_states.py` (`clutch_state`,
+  `clutch_slip_ratio`, `neutral_coasting_state`, `engine_braking_phase`, `over_rev`, `lugging`,
+  `cold_engine_abuse`), `d103_windows.py` (`idle_rpm_std`, `idle_rpm_drift`,
+  `charging_plateau_voltage`, `fuel_level_filtered`, `road_roughness`, `heat_soak_delta`,
+  `idle_map_residual`) and `d103_events.py` (`shift_event`, `launch_event`, `braking_event`,
+  `pitch_event`, `refuel_event`, `cranking_dip`, `battery_rest_voltage`), and the class-B
+  summaries in `d103_summaries.py`. The rule of each is the "Rule (D-103 ...)" sentence of its
+  defs description; **every threshold, band, window and reference is read from its declared
+  `const.*` input** (`vehicle/cl250_constants.yaml`, all `provisional`), so a later defs release
+  changes the results without a code change. The values are provisional. Where a sentence is
+  ambiguous the function docstring names the reading taken. New flags: `not_moving`, `no_gear`,
+  `not_applicable`, `no_data`, `no_step`, `starts_warm`, `never_warm`, `no_steady_samples`.
+  `road_roughness` band-passes the IMU vertical acceleration with a first-order high-pass and
+  low-pass (bilinear sections, pure Python). Class-A signals left `not_implemented` with a
+  reason (`NOT_IMPLEMENTED_REASONS_A` in `d103_common.py`): `wheel_slip`,
+  `volumetric_efficiency`, `intake_flow_residual`, `data_quality_mask` (defs gaps, see the
+  reasons).
+- Not computed (`not_implemented`): the class-A signals without a formula (missing thresholds
+  or constants or defs gaps), and class C/D; signals with `ready_phase0:
   false` or `pending_inputs` (`not_ready`, never evaluated).
 
 `parquet/derived.parquet` is long format: `session_id` (every row),
@@ -379,20 +396,18 @@ D-087; sensors: `SENSORS` `stale_after_ms`), so a gap adds nothing. A value outs
   period, so a sample mean is a time average). A session that contains a key-off and key-on is
   still one "ride" here, so its class-B values mix both; `ride_stop_count` ignores a stop
   still open at the end of the data (the class-A `stop_event` rule).
-- `not_implemented` with a `reason`: `ride_warmup_time` (threshold: operating coolant
-  temperature), `ride_thermal_cycle_count` (threshold: cold/hot coolant temperatures),
-  `ride_fan_on_temperature` (threshold: fan voltage step), `throttle_torque_lag` (definition:
-  throttle step and lag search range), `ride_final_drive_ratio` (threshold: steady cruise),
-  `speedometer_error` and `effective_tyre_radius` (threshold: steady speed and GNSS accuracy),
-  `ride_aggressiveness_score` and `ride_cornering_aggressiveness` (definition: score weights),
-  `ride_can_error_count` (definition: TEC/REC are levels, not error counts),
-  `ride_unanswered_did_count` (definition: sensor and BLE field differ),
-  `ride_tester_nrc78_count` (definition: BLE rttNrc78Count belongs to the rotating rttDid
-  record) and the signals whose class-A input the reference does not compute
-  (`input not implemented: derived.<name>`): `ride_heat_soak_max`, `ride_cranking_dip`,
-  `ride_rest_voltage`, `ride_cold_abuse_time`, `ride_over_rev_time`, `ride_lugging_time`,
-  `ride_idle_rpm_std`, `ride_idle_rpm_drift`, `ride_shift_count`, `ride_launch_count`,
-  `coast_down_cda`, `coast_down_rolling_resistance`. `ready_phase0: false` / `pending_inputs`
+- D-103 summaries (`d103_summaries.py`): `ride_warmup_time`, `ride_thermal_cycle_count`,
+  `throttle_torque_lag`, `speedometer_error`, `effective_tyre_radius`,
+  `ride_aggressiveness_score`, `ride_cornering_aggressiveness`, `ride_can_error_count`,
+  `ride_unanswered_did_count` and the usage of the new class-A signals (`ride_heat_soak_max`,
+  `ride_cranking_dip`, `ride_rest_voltage`, `ride_cold_abuse_time`, `ride_over_rev_time`,
+  `ride_lugging_time`, `ride_idle_rpm_std`, `ride_idle_rpm_drift`, `ride_shift_count`,
+  `ride_launch_count`). Thresholds come from the constants file, as for class A.
+- `not_implemented` with a `reason`: `ride_fan_on_temperature` (the rule needs a steady-RPM
+  condition without input or threshold), `ride_final_drive_ratio` (needs the nominal gear
+  ratios, not declared), `ride_tester_nrc78_count` (needs the rttDid, not declared),
+  `coast_down_cda` and `coast_down_rolling_resistance` (no coast-down speed band), and the
+  D-079 window signals. `ready_phase0: false` / `pending_inputs`
   signals are `not_ready`; absent inputs are `missing_inputs` (with the list).
 
 `parquet/derived_summary.parquet` is long format, one row per scalar or per cell: `session_id`,
@@ -409,8 +424,8 @@ recomputes both files and prints one more line per session. There is no index co
 
 ## Golden vectors for rt-core (D-070 item 2)
 
-`src/vehicle_server/derived/golden.py` runs the Python reference over four synthetic
-scenarios (`idle_warmup`, `accel_gears`, `stale_gap`, `edge_values`; no GPS, no real ride,
+`src/vehicle_server/derived/golden.py` runs the Python reference over five synthetic
+scenarios (`idle_warmup`, `accel_gears`, `stale_gap`, `start_idle_refuel`, `edge_values`; no GPS, no real ride,
 no randomness) and writes the inputs and the expected outputs as C99 headers for the
 vehicle-rt-core host tests:
 
