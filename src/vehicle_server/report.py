@@ -458,6 +458,7 @@ def build_report(
                 if row.decoded["can_health"]["bus_state"]
             }
         )
+        ecu_present = [row.decoded["flags"].get("ecuPresent") for row in can_rows]
         can_health_summary = {
             "max_tec": max(row.decoded["can_health"]["tec"] for row in can_rows),
             "max_rec": max(row.decoded["can_health"]["rec"] for row in can_rows),
@@ -473,6 +474,9 @@ def build_report(
             "latched_bus_off": any(
                 row.decoded["can_health"]["flags"].get("latchedBusOff") for row in can_rows
             ),
+            "ecu_present_rows": sum(flag is True for flag in ecu_present),
+            "ecu_absent_rows": sum(flag is False for flag in ecu_present),
+            "ecu_present_last": ecu_present[-1],
             "bus_states_seen": bus_states_seen,
         }
 
@@ -700,11 +704,18 @@ def render_text(report: dict[str, Any]) -> str:
 
     if report["can_health"]:
         can = report["can_health"]
+        if "ecu_present_rows" in can:
+            present = can["ecu_present_rows"]
+            absent = can["ecu_absent_rows"]
+            known = present + absent
+            ecu = f"ecu present={present}/{known} absent={absent} last={can['ecu_present_last']}"
+        else:
+            ecu = "ecu present=n/a (old report)"
         lines.append(
             f"  CAN health: max TEC={can['max_tec']} max REC={can['max_rec']} "
             f"bus-off={can['max_bus_off_count']} unanswered DIDs={can['max_unanswered_did_count']} "
             f"latched(foreign_tester={can['latched_foreign_tester']}, "
-            f"bus_off={can['latched_bus_off']}) states={can['bus_states_seen']}"
+            f"bus_off={can['latched_bus_off']}) states={can['bus_states_seen']} {ecu}"
         )
 
     tester = report.get("tester_stats")

@@ -4,7 +4,9 @@ from pathlib import Path
 
 import pytest
 
+from vehicle_server import ble_schema
 from vehicle_server.config import Settings
+from vehicle_server.defs import ble as defs_ble
 from vehicle_server.ingest import ingest_path
 from vehicle_server.report import render_text
 
@@ -151,3 +153,85 @@ def test_v4_app_columns_disagreeing_with_raw_hex_are_flagged(
     assert result.report["status"] == "warn"
     # The authoritative value (raw_hex) is what the report uses.
     assert result.report["tester_stats"]["rtt"]["0xF40C"]["max_ms"] == 11
+
+
+SCHEMA = ble_schema.load_default_schema()
+ECU_PRESENT_BIT = next(bit["bit"] for bit in SCHEMA["flags"]["bits"] if bit["name"] == "ecuPresent")
+
+
+def _rewrite_ecu_present(session_dir: Path, states: list[bool]) -> None:
+    telemetry_path = session_dir / "telemetry.csv"
+    header, *rows = telemetry_path.read_text().splitlines()
+    columns = header.split(",")
+    raw_index = columns.index("raw_hex")
+    field_defs = defs_ble.telemetry_fields(3)
+    total_bytes = defs_ble.TOTAL_BYTES_BY_VERSION[3]
+    for i, (row, present) in enumerate(zip(rows, states, strict=True)):
+        fields = row.split(",")
+        values = ble_schema.unpack_fields(bytes.fromhex(fields[raw_index]), field_defs)
+        if present:
+            values["flags"] |= 1 << ECU_PRESENT_BIT
+        else:
+            values["flags"] &= ~(1 << ECU_PRESENT_BIT)
+        fields[raw_index] = ble_schema.pack_fields(values, field_defs, total_bytes).hex()
+        rows[i] = ",".join(fields)
+    telemetry_path.write_text("\n".join([header, *rows]) + "\n")
+
+
+def test_v3_ecu_present_on_all_can_health_rows(settings: Settings, fixtures_dir: Path):
+    result = ingest_path(fixtures_dir / "v3_session", settings)
+    can = result.report["can_health"]
+
+    assert can["ecu_present_rows"] == 5
+    assert can["ecu_absent_rows"] == 0
+    assert can["ecu_present_last"] is True
+    assert "ecu present=5/5 absent=0 last=True" in render_text(result.report)
+
+
+def test_v3_ecu_absent_on_all_can_health_rows(
+    settings: Settings, fixtures_dir: Path, tmp_path: Path
+):
+    from .conftest import copy_fixture
+
+    session_dir = copy_fixture(fixtures_dir / "v3_session", tmp_path / "session")
+    _rewrite_ecu_present(session_dir, [False] * 5)
+
+    result = ingest_path(session_dir, settings)
+    can = result.report["can_health"]
+
+    assert can["ecu_present_rows"] == 0
+    assert can["ecu_absent_rows"] == 5
+    assert can["ecu_present_last"] is False
+    assert "ecu present=0/5 absent=5 last=False" in render_text(result.report)
+
+
+def test_v3_ecu_present_then_absent(settings: Settings, fixtures_dir: Path, tmp_path: Path):
+    from .conftest import copy_fixture
+
+    session_dir = copy_fixture(fixtures_dir / "v3_session", tmp_path / "session")
+    _rewrite_ecu_present(session_dir, [True, True, True, False, False])
+
+    result = ingest_path(session_dir, settings)
+    can = result.report["can_health"]
+
+    assert can["ecu_present_rows"] == 3
+    assert can["ecu_absent_rows"] == 2
+    assert can["ecu_present_last"] is False
+    assert "ecu present=3/5 absent=2 last=False" in render_text(result.report)
+
+
+def test_v2_has_no_can_health_and_ecu_keys_are_absent(settings: Settings, fixtures_dir: Path):
+    result = ingest_path(fixtures_dir / "v2_session", settings)
+
+    assert result.report["can_health"] is None
+    assert "CAN health" not in render_text(result.report)
+
+
+def test_old_report_text_marks_ecu_presence_unknown(settings: Settings, fixtures_dir: Path):
+    result = ingest_path(fixtures_dir / "v3_session", settings)
+    old_report = dict(result.report)
+    old_report["can_health"] = dict(result.report["can_health"])
+    for key in ("ecu_present_rows", "ecu_absent_rows", "ecu_present_last"):
+        del old_report["can_health"][key]
+
+    assert "ecu present=n/a (old report)" in render_text(old_report)
