@@ -7,6 +7,7 @@ import pytest
 from vehicle_server.defs import vehicle_cl250, vehicle_derived
 from vehicle_server.derived import engine
 from vehicle_server.derived.context import At
+from vehicle_server.derived.d103_common import NOT_IMPLEMENTED_REASONS_A
 from vehicle_server.derived.formulas import Formula
 
 from .derived_helpers import FakeInputs, const_series, ramp
@@ -218,9 +219,14 @@ def test_other_classes_events_and_unimplemented_signals_are_not_implemented():
         "reason": "class B",
     }
     assert coverage["ride_distance"]["status"] == engine.NOT_IMPLEMENTED
-    assert coverage["shift_event"]["reason"] == "event"
+    assert coverage["shift_event"]["status"] == engine.MISSING_INPUTS  # D-103 events are computed
+    assert coverage["wheel_slip"] == {
+        "class": "A",
+        "status": engine.NOT_IMPLEMENTED,
+        "reason": NOT_IMPLEMENTED_REASONS_A["wheel_slip"],
+    }
     assert coverage["stop_event"]["status"] == engine.MISSING_INPUTS  # events are computed now
-    assert coverage["clutch_state"]["reason"] == "no formula"
+    assert coverage["clutch_state"]["status"] == engine.MISSING_INPUTS
     assert set(coverage) == set(vehicle_derived.SIGNALS)
 
 
@@ -346,9 +352,22 @@ def test_an_event_with_no_formula_is_not_implemented_with_reason_event():
     assert result.coverage["e"]["reason"] == "event"
 
 
-def test_the_event_signals_other_than_stop_event_stay_not_implemented():
+def test_every_event_signal_has_a_formula():
     coverage = engine.evaluate(FakeInputs({})).coverage
     events = {n for n, s in vehicle_derived.SIGNALS.items() if s.get("event")}
-    assert "stop_event" in events
-    for name in events - {"stop_event"}:
-        assert coverage[name]["status"] in (engine.NOT_IMPLEMENTED, engine.NOT_READY), name
+    assert {"stop_event", "shift_event", "launch_event", "braking_event"} <= events
+    for name in events:
+        assert coverage[name]["status"] in (engine.MISSING_INPUTS, engine.NOT_READY), name
+
+
+def test_class_a_signals_left_out_of_d103_report_their_reason():
+    coverage = engine.evaluate(FakeInputs({})).coverage
+    assert set(NOT_IMPLEMENTED_REASONS_A) == {
+        "wheel_slip",
+        "volumetric_efficiency",
+        "intake_flow_residual",
+        "data_quality_mask",
+    }
+    for name, reason in NOT_IMPLEMENTED_REASONS_A.items():
+        assert coverage[name]["status"] == engine.NOT_IMPLEMENTED
+        assert coverage[name]["reason"] == reason
