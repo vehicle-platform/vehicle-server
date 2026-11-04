@@ -45,6 +45,7 @@ a reverse proxy) -- the API itself only does bearer-token auth, not TLS.
 uv run vehicle-server import <folder-or-zip>      # ingest a session, print its report
 uv run vehicle-server report <session_id>         # re-print a stored session's report
 uv run vehicle-server report <session_id> --format json
+uv run vehicle-server bringup <session_id> --gate V0 [--json]  # bring-up gate check (B0/V0/V1)
 uv run vehicle-server list                        # one line per ingested session
 uv run vehicle-server derive <session_id>         # recompute the derived signals and ride summaries of a stored session
 uv run vehicle-server derive --all                # ... of every stored session
@@ -55,6 +56,7 @@ uv run vehicle-server serve [--host] [--port] [--reload]
 
 `import` and `report` exit 0 for status `ok`/`warn`, 1 for `fail` or an
 invalid session, 2 for a session-id conflict (same id, different content).
+`bringup` exits 0 for `pass`, 1 for `fail` or an unknown session, 2 for `incomplete`.
 
 ## HTTP API
 
@@ -70,6 +72,7 @@ All endpoints except `GET /health` require `Authorization: Bearer $VEHICLE_API_T
 | `GET /sessions/{id}/track` | Relative dead-reckoned ride track from GNSS speed and heading (D-060, D-076). Query: `max_points` (10..20000, default 2000, RDP simplification), `min_heading_speed_mps` (0..10, default 1.0: below it the last trusted heading is held), `color` (optional one `did.<NAME>`, `sensor.<name>` or `derived.<signal>`; position-looking and unknown names are `404` like `/stats`), `from_ms`/`to_ms` (inclusive window on the `/series` t0 axis, applied before integration). Returns `{session_id, t0_device_ms, method: "dead_reckoning", frame: "relative_enu_from_first_fix", max_points, points_total, downsampled, path_length_m, segments_total, excluded: {no_fix, stale_fix, untrusted_heading}, color: {name, unit} | null, segments: [{t_ms, x_m, y_m, speed_mps, heading_deg, color_v?, gap_before_ms}]}`. The shape is dead-reckoned from speed and heading in metres relative to the first usable sample (east = +x, north = +y); error grows with distance, it is approximate and **not a map**. It never contains an absolute position. `404` unknown session or `session has no GPS`; `422` too many segments for `max_points` or an out-of-range query. `color_v` is the latest colour sample at or before each kept point, null after staleness; derived series use their defs `stale_after_ms`, else three `period_ms`; a catalog DID without a poll-plan `stale_after_ms` and a derived signal with neither are held. Simplification is exact RDP: the tolerance is the smallest one whose result fits `max_points`. |
 | `GET /sessions/{id}/summary` | Stored class-B per-ride summary of one session (D-070, D-087). Returns `{session_id, ride_definition, defs_version, signals: [...]}` in defs order. A computed scalar has `{name, status: "computed", unit, range, kind: "scalar", value, flag}`; a computed binned signal has `{name, status: "computed", unit, range, kind: "binned", axes: [{input, unit, edges: [[lo, hi], ...]}], cells: [{index, axes: [bin, ...], value, flag}], total_s, outside_s}`. Stored cells and their edges come from `parquet/derived_summary.parquet`; axes and units from the pinned defs. If the stored edges disagree with the defs (a session decoded with another defs version), the stored edges are returned and the signal has `defs_mismatch: true`. Non-computed entries keep `status` plus `reason`/`pending_inputs`/`missing`/`message`. `404` unknown session or `session has no ride summary`; an error block is `404` with its stored text. Never contains a position. |
 | `GET /rides` | Cross-session class-B scalar trend table. Query: `from`/`to` (optional ISO 8601 date or timestamp, inclusive, UTC; a date-only value covers the whole UTC day, a timestamp without an offset is UTC), `names` (optional comma-separated class-B scalars; default all, response order follows the query). Returns `{columns: [{name, unit}], rows: [{session_id, created_utc, values: {name: value|null}, flags: {name: flag|status|null}}], skipped}` sorted by `created_utc` ascending. Sessions inside the range without a stored summary block are skipped (`skipped`); a non-computed value is null with its status in `flags`. `422` unknown or non-class-B names; binned summaries are refused here and belong to `/summary`. Reads report blocks only, never every parquet file. Never contains a position. |
+| `GET /sessions/{id}/bringup` | Bring-up gate check of a stored session (see *Bring-up gate check*). Query: `gate` (`B0`, `V0` or `V1`, case-insensitive). Returns the same JSON as `vehicle-server bringup --json`. `404` unknown session, `422` missing or unknown gate. |
 | `GET /sessions/{id}/stats` | Exact statistics over full-resolution points. Query: `signals` (comma-separated `did.<NAME>`, `sensor.<name>`, `derived.<signal>`; default all available), `start_ms`/`end_ms` (inclusive window relative to `t0_device_ms`, the same axis as `/series`). Returns `{session_id, t0_device_ms, start_ms, end_ms, series: [{name, kind, unit, count, mean, std, min, max, p05, p50, p95, t_first_ms, t_last_ms}]}`. `std` is the population standard deviation and percentiles use linear interpolation, computed before any downsampling; an empty window has `count: 0` and null statistics/times. `404` unknown session or unknown/position-looking series name (listed). Never contains a GPS position. |
 | `GET /ws/live` (WebSocket) | Live stream for vehicle-analyzer (D-081). First message `{"type": "hello", "token": "<VEHICLE_API_TOKEN>"}` within 5 s, optional frame filters `"channels": [1, 2]` and `"ids": [...]`; the token is never put in the URL. Then `{"type": "batch", "payload": StreamBatchDto}` messages and every 5 s `{"type": "heartbeat", "payload": {"source", "dropped", "timestamp_us"}}`. Close `1008` bad hello or token, `1011` no `VEHICLE_API_TOKEN`. One bounded queue per client: a slow client loses its oldest batches (`dropped`), never blocks the others. |
 
@@ -144,7 +147,8 @@ covering: which telemetry layout (v2/v3/v4) and packet versions were seen, the
 defs version used to decode it, a raw_hex re-decode vs. the app's own decoded
 columns (consistency check), packet loss recomputed from `seq`, rx/device
 time ordering and gaps, per-signal range and validity checks against
-`vehicle_defs.vehicle_cl250.DIDS`, CAN health (v3), tester stats (v4), IMU
+`vehicle_defs.vehicle_cl250.DIDS`, CAN health (v3; including `ecu_present_rows` /
+`ecu_absent_rows` / `ecu_present_last` from the `ecuPresent` flag), tester stats (v4), IMU
 sample-loss/scale checks (recomputed from `sample_index` and `*_raw`, including
 `sensorReconfigured` blocks), a GPS summary and a vehicle-signal summary (see below). Overall status is
 `ok` / `warn` / `fail`.
@@ -155,6 +159,35 @@ last `step_gap_max_ms` / `step_gap_over_count` and, per `rtt_did` (keyed in hex,
 sum or count is saturated at `0xFFFFFFFF`), count and NRC 0x78 count. These are
 measurements of the temporary vehicle-bus tester (D-058), not vehicle signals; they do
 not change the session status.
+
+### Bring-up gate check
+
+`vehicle-server bringup <session_id> --gate B0|V0|V1` and `GET /sessions/{id}/bringup?gate=`
+(`src/vehicle_server/bringup.py`) answer whether a stored session passes a gate of the
+bring-up sequence in `vehicle-defs/docs/hardware-integration.md` §6, one line per "Pass when"
+criterion:
+
+- **B0** (desk, mock firmware): report status `ok`, IMU gap count 0, and "at rest" (manual).
+- **V0** (bike, ignition on, engine off): ECU present on every CAN health row, every polled DID
+  (the BLE telemetry fields with a `defsSignal`) has a valid sample and none out of range, no
+  latch flag, no bus-off.
+- **V1** (engine idling, closed area): the V0 CAN health checks over the whole session, CAN
+  health rows spanning at least 5 min of node time ("clean" = those session-wide checks, not a
+  sliding window), and "RPM changes with a throttle blip" (manual: the min / p50 / max of
+  `ENGINE_SPEED` is shown).
+
+V0 and V1 also show the §7.2 tester statistics as warnings: a step gap above
+`CLIENT_STEP_MAX_MS` or a round trip above `ASSUMED_ROUND_TRIP_MS` (both from `vehicle_defs`). A session without
+version 4 tester data (a v3 recording) therefore reaches `incomplete` at best on V0 and V1.
+
+Each check has `id`, `status`, `measured`, `expected`, `source` (doc section or defs constant)
+and `note`. Statuses: `pass`, `fail`, `warn` (never fails the gate), `manual` (the doc gives no
+number, so **you** judge it from `measured`; it never changes the verdict) and `unknown` (the
+session or an older report lacks the data, e.g. no IMU, v2 telemetry without CAN health, no v4
+tester data, a report from before the ECU presence counts, or a node reboot during the session).
+Verdict: `fail` if any check fails, else `incomplete` if any is unknown, else `pass`
+(the text form adds "pending N manual check(s)"). The check only reads `report.json`,
+`telemetry.parquet` and `signals.parquet`; it never reads GPS data and never rewrites a report.
 
 ## Environment variables
 

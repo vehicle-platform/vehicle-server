@@ -1,4 +1,5 @@
-"""Command-line entry point: `vehicle-server import|serve|report|list|derive|golden|export`."""
+"""Command-line entry point: `vehicle-server <command>` (import, serve, report, bringup, list,
+derive, golden, export)."""
 
 from __future__ import annotations
 
@@ -7,7 +8,7 @@ import json
 import sys
 from pathlib import Path
 
-from vehicle_server import index, report
+from vehicle_server import bringup, index, report
 from vehicle_server.config import load_settings
 from vehicle_server.ingest import (
     InvalidSessionError,
@@ -19,6 +20,9 @@ from vehicle_server.ingest import (
 EXIT_OK_OR_WARN = 0
 EXIT_FAIL_OR_ERROR = 1
 EXIT_CONFLICT = 2
+
+# `vehicle-server bringup`: exit code per gate verdict (an unknown session is EXIT_FAIL_OR_ERROR).
+BRINGUP_EXIT = {"pass": 0, "fail": 1, "incomplete": 2}
 
 
 def _cmd_import(args: argparse.Namespace) -> int:
@@ -57,6 +61,24 @@ def _cmd_report(args: argparse.Namespace) -> int:
     else:
         print(json.dumps(report_dict, indent=2))
     return EXIT_OK_OR_WARN if report_dict["status"] in ("ok", "warn") else EXIT_FAIL_OR_ERROR
+
+
+def _cmd_bringup(args: argparse.Namespace) -> int:
+    settings = load_settings()
+    session_dir = settings.sessions_dir / args.session_id
+    report_path = session_dir / "report.json"
+    if not report_path.is_file():
+        print(f"error: unknown session: {args.session_id}", file=sys.stderr)
+        return EXIT_FAIL_OR_ERROR
+
+    result = bringup.check_gate(
+        args.gate, json.loads(report_path.read_text()), bringup.load_inputs(session_dir)
+    )
+    if args.json:
+        print(json.dumps(result.to_dict(), indent=2))
+    else:
+        print(bringup.format_text(result), end="")
+    return BRINGUP_EXIT[result.verdict]
 
 
 def _cmd_list(_args: argparse.Namespace) -> int:
@@ -150,6 +172,14 @@ def build_parser() -> argparse.ArgumentParser:
     report_parser.add_argument("session_id")
     report_parser.add_argument("--format", choices=["json", "text"], default="text")
     report_parser.set_defaults(func=_cmd_report)
+
+    bringup_parser = subparsers.add_parser(
+        "bringup", help="check a session against bring-up gate B0, V0 or V1"
+    )
+    bringup_parser.add_argument("session_id")
+    bringup_parser.add_argument("--gate", required=True, type=str.upper, choices=bringup.GATES)
+    bringup_parser.add_argument("--json", action="store_true", help="print the JSON result")
+    bringup_parser.set_defaults(func=_cmd_bringup)
 
     list_parser = subparsers.add_parser("list", help="list ingested sessions")
     list_parser.set_defaults(func=_cmd_list)

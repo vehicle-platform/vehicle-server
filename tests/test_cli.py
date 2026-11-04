@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import shutil
 from pathlib import Path
 
@@ -72,3 +73,48 @@ def test_cli_list_after_import(
     assert code == 0
     out = capsys.readouterr().out
     assert "20260115-120000-a1b2" in out
+
+
+@pytest.mark.parametrize(
+    ("fixture", "session_id", "gate", "code"),
+    [
+        ("v4_session", "20260115-140000-e5f6", "V0", 0),  # pass (tester stats only warn)
+        ("v3_session", "20260115-130000-c3d4", "V0", 1),  # latched bus-off -> fail
+        ("v2_session", "20260115-120000-a1b2", "V0", 2),  # no CAN health -> incomplete
+    ],
+)
+def test_cli_bringup_exit_code_follows_the_verdict(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    fixtures_dir: Path,
+    capsys,
+    fixture,
+    session_id,
+    gate,
+    code,
+):
+    _run(monkeypatch, tmp_path, ["import", str(fixtures_dir / fixture)])
+    capsys.readouterr()
+    assert _run(monkeypatch, tmp_path, ["bringup", session_id, "--gate", gate]) == code
+    out = capsys.readouterr().out
+    assert f"Bring-up gate {gate} for {session_id}" in out
+    assert "Verdict:" in out
+
+
+def test_cli_bringup_json_and_lower_case_gate(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, fixtures_dir: Path, capsys
+):
+    _run(monkeypatch, tmp_path, ["import", str(fixtures_dir / "v4_session")])
+    capsys.readouterr()
+    _run(monkeypatch, tmp_path, ["bringup", "20260115-140000-e5f6", "--gate", "v1", "--json"])
+    data = json.loads(capsys.readouterr().out)
+    assert data["gate"] == "V1"
+    assert data["needs_you"] == ["rpm_throttle_blip"]
+
+
+def test_cli_bringup_unknown_session_exits_one(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    assert _run(monkeypatch, tmp_path, ["bringup", "00000000-000000-ffff", "--gate", "B0"]) == 1
+
+
+def test_cli_bringup_rejects_an_unknown_gate(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    assert _run(monkeypatch, tmp_path, ["bringup", "00000000-000000-ffff", "--gate", "V2"]) == 2

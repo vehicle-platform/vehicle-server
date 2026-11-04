@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import json
 import shutil
 import tomllib
 from pathlib import Path
@@ -143,3 +144,65 @@ def test_create_session_too_large_is_413(fixtures_dir: Path, tmp_path: Path):
         files={"archive": ("session.zip", io.BytesIO(body), "application/zip")},
     )
     assert resp.status_code == 413
+
+
+def _upload(client: TestClient, fixtures_dir: Path, tmp_path: Path, name: str) -> None:
+    body = _zip_bytes(fixtures_dir, name, tmp_path)
+    resp = client.post(
+        "/sessions",
+        headers=AUTH,
+        files={"archive": ("session.zip", io.BytesIO(body), "application/zip")},
+    )
+    assert resp.status_code == 201
+
+
+@pytest.mark.parametrize("gate", ["B0", "V0", "V1", "v0"])
+def test_bringup_returns_the_result_for_each_gate(
+    client: TestClient, fixtures_dir: Path, tmp_path: Path, gate: str
+):
+    _upload(client, fixtures_dir, tmp_path, "v4_session")
+    resp = client.get("/sessions/20260115-140000-e5f6/bringup", headers=AUTH, params={"gate": gate})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["gate"] == gate.upper()
+    assert data["session_id"] == "20260115-140000-e5f6"
+    assert data["verdict"] in ("pass", "fail", "incomplete")
+    assert all(
+        set(c) == {"id", "status", "measured", "expected", "source", "note"} for c in data["checks"]
+    )
+
+
+def test_bringup_matches_the_cli_serialiser(client: TestClient, fixtures_dir: Path, tmp_path: Path):
+    from vehicle_server import bringup
+
+    _upload(client, fixtures_dir, tmp_path, "v4_session")
+    resp = client.get("/sessions/20260115-140000-e5f6/bringup", headers=AUTH, params={"gate": "V0"})
+    session_dir = client.app.state.settings.sessions_dir / "20260115-140000-e5f6"
+    report = json.loads((session_dir / "report.json").read_text())
+    expected = bringup.check_gate("V0", report, bringup.load_inputs(session_dir)).to_dict()
+    assert resp.json() == json.loads(json.dumps(expected))
+
+
+def test_bringup_needs_the_token(client: TestClient, fixtures_dir: Path, tmp_path: Path):
+    _upload(client, fixtures_dir, tmp_path, "v4_session")
+    url = "/sessions/20260115-140000-e5f6/bringup"
+    assert client.get(url, params={"gate": "V0"}).status_code == 401
+    assert (
+        client.get(url, params={"gate": "V0"}, headers={"Authorization": "Bearer nope"}).status_code
+        == 401
+    )
+
+
+def test_bringup_unknown_session_is_404(client: TestClient):
+    resp = client.get("/sessions/00000000-000000-ffff/bringup", headers=AUTH, params={"gate": "V0"})
+    assert resp.status_code == 404
+
+
+@pytest.mark.parametrize("params", [{}, {"gate": "V2"}])
+def test_bringup_missing_or_unknown_gate_is_422(
+    client: TestClient, fixtures_dir: Path, tmp_path: Path, params: dict
+):
+    _upload(client, fixtures_dir, tmp_path, "v4_session")
+    resp = client.get("/sessions/20260115-140000-e5f6/bringup", headers=AUTH, params=params)
+    assert resp.status_code == 422
+    assert "gate must be one of" in resp.json()["detail"]
