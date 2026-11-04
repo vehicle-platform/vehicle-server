@@ -20,7 +20,16 @@ from fastapi import Depends, FastAPI, HTTPException, Query, Request, UploadFile,
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, PlainTextResponse
 
-from vehicle_server import __version__, gps_track, index, report, ride_summary, series, stream
+from vehicle_server import (
+    __version__,
+    bringup,
+    gps_track,
+    index,
+    report,
+    ride_summary,
+    series,
+    stream,
+)
 from vehicle_server.config import Settings, load_settings
 from vehicle_server.ingest import (
     SESSION_ID_RE,
@@ -120,6 +129,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if format == "text":
             return PlainTextResponse(report.render_text(report_dict))
         return JSONResponse(content=report_dict)
+
+    @app.get("/sessions/{session_id}/bringup", dependencies=[AuthDep])
+    def get_session_bringup(session_id: str, settings: SettingsDep, gate: str | None = None):
+        session_dir = settings.sessions_dir / session_id
+        report_path = session_dir / "report.json"
+        if not SESSION_ID_RE.match(session_id) or not report_path.is_file():
+            raise HTTPException(status_code=404, detail=f"unknown session: {session_id}")
+        if gate is None or gate.upper() not in bringup.GATES:
+            raise HTTPException(
+                status_code=422,
+                detail=f"gate must be one of {', '.join(bringup.GATES)}, got {gate!r}",
+            )
+
+        result = bringup.check_gate(
+            gate, json.loads(report_path.read_text()), bringup.load_inputs(session_dir)
+        )
+        return result.to_dict()
 
     @app.get("/sessions/{session_id}/series", dependencies=[AuthDep])
     def get_session_series(
