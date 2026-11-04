@@ -15,7 +15,7 @@ organization; see `vehicle-defs/docs/ARCHITECTURE.md` for the platform picture.
 ## Setup
 
 ```bash
-git submodule update --init --recursive   # external/vehicle-defs, pinned to v0.22.0
+git submodule update --init --recursive   # external/vehicle-defs, pinned to v0.23.0
 uv sync                                    # installs runtime + dev dependencies
 ```
 
@@ -83,7 +83,7 @@ top-level folder -- see the session contract the phone app writes to.
 Example `/sessions/{id}/summary` response (one scalar, one binned signal; other signals elided):
 
 ```json
-{"session_id": "20260115-120000-abcd", "ride_definition": "session", "defs_version": "v0.22.0",
+{"session_id": "20260115-120000-abcd", "ride_definition": "session", "defs_version": "v0.23.0",
  "signals": [
    {"name": "ride_distance", "status": "computed", "unit": "km", "range": [0.0, 2000.0],
     "kind": "scalar", "value": 12.3, "flag": null},
@@ -418,7 +418,7 @@ vehicle-rt-core host tests:
 uv run vehicle-server golden --out <vehicle-rt-core>/tests/host/vectors   # also python -m vehicle_server.derived.golden
 ```
 
-- Defs version: the headers record the defs version they were generated from (v0.22.0 now).
+- Defs version: the headers record the defs version they were generated from (v0.23.0 now).
   The expected outputs use that version's derived `stale_after_ms` (the age limit of a
   derived input; a DID input uses the DID's own limit, D-070), which changed in v0.14.0, so rt-core's derived-module test needs a
   defs pin with the same derived table (v0.14.0 or later); against v0.13.0 the torque and
