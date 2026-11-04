@@ -43,7 +43,7 @@ from pathlib import Path
 from typing import Any
 
 from vehicle_server.defs import defs_version, vehicle_catalog, vehicle_derived
-from vehicle_server.derived import context, engine, formulas
+from vehicle_server.derived import context, d103_common, d103_summaries, engine, formulas
 from vehicle_server.derived.formulas import FORMULAS
 from vehicle_server.derived.inputs import Series, constant
 
@@ -60,7 +60,7 @@ SELECTION_RULE = (
 
 # DIDs fed to every scenario although no selected signal reads them (idle_warmup: "battery
 # steady"); the host test must ignore a DID nobody consumes.
-EXTRA_DIDS = ("BATTERY_VOLTAGE",)
+EXTRA_DIDS = ("BATTERY_VOLTAGE", "RUN_TIME_SINCE_START")
 
 # The flags the vectors can carry, in enum order. Checked against the FLAG_* constants of
 # context.py / formulas.py / engine.py: a flag added there fails the generator until it is
@@ -76,6 +76,14 @@ FLAG_ORDER = (
     "no_consumption",
     "no_power",
     "engine_off",
+    "not_moving",
+    "no_gear",
+    "not_applicable",
+    "no_data",
+    "no_step",
+    "starts_warm",
+    "never_warm",
+    "no_steady_samples",
 )
 
 
@@ -86,7 +94,7 @@ def flag_constant(flag: str) -> str:
 def used_flags() -> set[str]:
     """Every FLAG_* string constant of the reference modules."""
     found: set[str] = set()
-    for module in (context, formulas, engine):
+    for module in (context, formulas, engine, d103_common, d103_summaries):
         for name, value in vars(module).items():
             if name.startswith("FLAG_") and isinstance(value, str):
                 found.add(value)
@@ -224,6 +232,7 @@ class Profile:
     throttle: Pts  # accelerator pedal, %
     rpm_free: Pts  # rpm while no gear is engaged (idle, clutch slip)
     gears: list[tuple[float, int]] = field(default_factory=lambda: [(0.0, 0)])  # (from, gear)
+    engine_on_s: float | None = None  # key-on without the engine until then (D-103 start)
     engine_off_s: float | None = None
     coolant: Pts = field(default_factory=lambda: [(0.0, 70.0), (30.0, 73.6)])
     oil: Pts = field(default_factory=lambda: [(0.0, 55.0), (30.0, 56.8)])
@@ -238,7 +247,9 @@ def make_model(p: Profile) -> Model:
         speed = interp(p.speed, t)
         pedal = interp(p.throttle, t)
         gear = [g for start, g in p.gears if t >= start][-1]
-        engine_on = p.engine_off_s is None or t < p.engine_off_s
+        engine_on = (p.engine_on_s is None or t >= p.engine_on_s) and (
+            p.engine_off_s is None or t < p.engine_off_s
+        )
         if not engine_on:
             rpm, pedal = 0.0, 0.0
         elif gear:
@@ -274,6 +285,11 @@ def make_model(p: Profile) -> Model:
             "COOLANT_TEMP": interp(p.coolant, t),
             "ENGINE_OIL_TEMP": interp(p.oil, t),
             "BATTERY_VOLTAGE": 14.1 + 0.02 * jit("battery") if engine_on else 12.4,
+            # D-103 inputs: load and manifold pressure follow the pedal, the ambient is steady.
+            "ENGINE_LOAD": (15.0 + 0.8 * pedal + 1.0 * jit("load")) if engine_on else 0.0,
+            "INTAKE_MAP": (30.0 + 0.65 * pedal + 0.5 * jit("map")) if engine_on else 99.0,
+            "AMBIENT_AIR_TEMP": 24.0,
+            "RUN_TIME_SINCE_START": max(0.0, t - (p.engine_on_s or 0.0)),
         }
         if p.tweak is not None:
             p.tweak(t, values)
@@ -388,6 +404,51 @@ _EDGE_PROFILE = Profile(
     tweak=_edge_tweak,
 )
 
+
+def _start_tweak(t: float, v: dict[str, float]) -> None:
+    """Cold start, closed throttle at idle, a fuel top-up at rest (D-103 events)."""
+    if 1.0 <= t < 1.4:  # cranking
+        v["ENGINE_SPEED"] = 300.0
+    elif 1.4 <= t < 1.6:
+        v["ENGINE_SPEED"] = 700.0
+    if 1.0 <= t < 1.9:  # the starter pulls the battery down
+        v["BATTERY_VOLTAGE"] = 9.6
+    if v["RELATIVE_ACCEL_PEDAL_POS"] == 0.0:  # closed throttle plate
+        v["THROTTLE_POS"] = 1.0
+    v["FUEL_LEVEL"] = 40.0 if t < 14.0 else 70.0
+
+
+_START_PROFILE = Profile(
+    speed=[
+        (0.0, 0.0),
+        (3.0, 0.0),
+        (6.0, 30.0),
+        (8.0, 30.0),
+        (10.0, 0.0),
+        (17.5, 0.0),
+        (18.5, 20.0),
+        (20.0, 20.0),
+        (21.0, 0.0),
+        (90.0, 0.0),
+    ],  # fmt: skip
+    throttle=[
+        (0.0, 0.0),
+        (3.0, 0.0),
+        (3.5, 30.0),
+        (8.0, 25.0),
+        (8.5, 0.0),
+        (17.5, 0.0),
+        (18.0, 15.0),
+        (20.0, 10.0),
+        (20.5, 0.0),
+        (90.0, 0.0),
+    ],  # fmt: skip
+    rpm_free=[(0.0, 1400.0), (90.0, 1400.0)],
+    engine_on_s=1.0,
+    coolant=[(0.0, 45.0), (30.0, 95.0)],
+    tweak=_start_tweak,
+)
+
 SCENARIOS = (
     Scenario(
         "idle_warmup",
@@ -409,6 +470,14 @@ SCENARIOS = (
         30_000,
         make_model(_ACCEL_PROFILE),
         gaps={"VEHICLE_SPEED": [(14_000, 21_000)]},
+    ),
+    Scenario(
+        "start_idle_refuel",
+        "Cold key-on, cranking start, launch, braking, rest with a fuel top-up, a second move, "
+        "then warm idle with the coolant above the operating temperature (D-103 start, "
+        "launch, braking, refuel, idle statistics) (90 s).",
+        90_000,
+        make_model(_START_PROFILE),
     ),
     Scenario(
         "edge_values",
