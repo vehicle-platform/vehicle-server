@@ -171,12 +171,14 @@ criterion:
 - **V0** (bike, ignition on, engine off): ECU present on every CAN health row, every polled DID
   (the BLE telemetry fields with a `defsSignal`) has a valid sample and none out of range, no
   latch flag, no bus-off.
-- **V1** (engine idling, closed area): the V0 CAN health checks, CAN health rows spanning at
-  least 5 min of node time, and "RPM changes with a throttle blip" (manual: the min / p50 / max
-  of `ENGINE_SPEED` is shown).
+- **V1** (engine idling, closed area): the V0 CAN health checks over the whole session, CAN
+  health rows spanning at least 5 min of node time ("clean" = those session-wide checks, not a
+  sliding window), and "RPM changes with a throttle blip" (manual: the min / p50 / max of
+  `ENGINE_SPEED` is shown).
 
 V0 and V1 also show the §7.2 tester statistics as warnings: a step gap above
-`CLIENT_STEP_MAX_MS` or a round trip above `ASSUMED_ROUND_TRIP_MS` (both from `vehicle_defs`).
+`CLIENT_STEP_MAX_MS` or a round trip above `ASSUMED_ROUND_TRIP_MS` (both from `vehicle_defs`). A session without
+version 4 tester data (a v3 recording) therefore reaches `incomplete` at best on V0 and V1.
 
 Each check has `id`, `status`, `measured`, `expected`, `source` (doc section or defs constant)
 and `note`. Statuses: `pass`, `fail`, `warn` (never fails the gate), `manual` (the doc gives no

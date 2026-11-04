@@ -108,7 +108,11 @@ def test_check_order_is_fixed():
         ("B0", "report_status", lambda r: r.update(status="fail")),
         ("B0", "imu_gap_count", lambda r: r["imu"].update(missing_samples=1)),
         ("V0", "ecu_present", lambda r: r["can_health"].update(ecu_absent_rows=1)),
-        ("V0", "ecu_present", lambda r: r["can_health"].update(ecu_present_rows=0)),
+        (
+            "V0",
+            "ecu_present",
+            lambda r: r["can_health"].update(ecu_present_rows=0, ecu_absent_rows=1),
+        ),
         ("V0", "dids_valid", lambda r: r["valid_ratios"]["coolant_temp"].update(valid_count=0)),
         (
             "V0",
@@ -193,6 +197,22 @@ def test_missing_data_is_unknown_with_a_reason(gate, block, check_ids):
     unknown = [c for c in result.checks if c.status == "unknown"]
     assert [c.id for c in unknown] == check_ids
     assert all(c.note for c in unknown)
+
+
+def test_ecu_flag_never_decoded_is_unknown():
+    report = _clean_report()
+    report["can_health"].update(ecu_present_rows=0, ecu_absent_rows=0, ecu_present_last=None)
+    result = bringup.check_gate("V0", report)
+    assert _status(result, "ecu_present") == "unknown"
+    assert result.verdict == "incomplete"
+
+
+def test_no_engine_speed_makes_the_blip_check_unknown():
+    no_rpm = bringup.BringupInputs(can_health_duration_s=float(bringup.V1_MIN_DURATION_S))
+    result = bringup.check_gate("V1", _clean_report(), no_rpm)
+    assert _status(result, "rpm_throttle_blip") == "unknown"
+    assert result.verdict == "incomplete"
+    assert result.needs_you == []
 
 
 def test_missing_duration_is_unknown():

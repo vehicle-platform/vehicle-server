@@ -38,13 +38,15 @@ V1_MIN_DURATION_S = 5 * 60
 
 # The engine-speed DID whose spread V1 shows for the throttle-blip check (defs name).
 ENGINE_SPEED = "ENGINE_SPEED"
-assert ENGINE_SPEED in vehicle_cl250.DIDS
+if ENGINE_SPEED not in vehicle_cl250.DIDS:
+    raise ImportError(f"vehicle_defs has no DID {ENGINE_SPEED}")
 
 # The bus-off state by its BLE schema enum name (canHealth.busState.values).
 _BUS_OFF_STATE = "busOff"
-assert _BUS_OFF_STATE in {
+if _BUS_OFF_STATE not in {
     value["name"] for value in ble_schema.load_default_schema()["canHealth"]["busState"]["values"]
-}
+}:
+    raise ImportError(f"the BLE schema has no bus state {_BUS_OFF_STATE}")
 
 
 @dataclass(frozen=True)
@@ -173,13 +175,22 @@ def _ecu_present(report: dict, gate: str) -> Check:
             "The report was built before it counted ECU presence (ecu_present_rows).",
         )
     present, absent = can["ecu_present_rows"], can["ecu_absent_rows"]
+    if not present and not absent:
+        return Check(
+            "ecu_present",
+            "unknown",
+            {"present_rows": 0, "absent_rows": 0, "last": can["ecu_present_last"]},
+            expected,
+            source,
+            "No CAN health row carried a decodable ecuPresent flag.",
+        )
     return Check(
         "ecu_present",
         "pass" if present and not absent else "fail",
         {"present_rows": present, "absent_rows": absent, "last": can["ecu_present_last"]},
         expected,
         source,
-        "Rows with the ecuPresent flag clear; telemetry.parquet shows where they are.",
+        "absent_rows = rows with the ecuPresent flag clear; telemetry.parquet shows where.",
     )
 
 
@@ -281,11 +292,21 @@ def _duration(report: dict, extra: BringupInputs) -> Check:
         {"seconds": seconds},
         expected,
         source,
-        "Span of the node clock (device_time_ms) over the rows carrying CAN health.",
+        "Span of the node clock over the CAN health rows; 'clean' is the latch and bus-off "
+        "checks above, which cover the whole session.",
     )
 
 
 def _throttle_blip(extra: BringupInputs) -> Check:
+    if extra.engine_speed is None:
+        return Check(
+            "rpm_throttle_blip",
+            "unknown",
+            None,
+            f"{ENGINE_SPEED} rises with a throttle blip and falls back to idle",
+            f"{_DOC} §6 V1",
+            f"The session has no valid {ENGINE_SPEED} sample.",
+        )
     return Check(
         "rpm_throttle_blip",
         "manual",
