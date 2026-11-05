@@ -451,6 +451,7 @@ class SummaryRow:
 class SummaryEvaluation:
     rows: list[SummaryRow] = field(default_factory=list)
     coverage: dict[str, dict[str, Any]] = field(default_factory=dict)  # class B, defs order
+    windows: dict[str, health_windows.WindowResult] = field(default_factory=dict)
 
 
 def _checked(value: float | None, flag: str | None, rng: list[float]) -> Outcome:
@@ -615,7 +616,7 @@ def evaluate(
         if spec["class"] == "B" and spec.get("window") and name in summaries
     }
     windows = _window_results(window_keys, inputs, outputs, specs, sensors, did_limits)
-    result = SummaryEvaluation()
+    result = SummaryEvaluation(windows=windows)
     entries: dict[str, dict[str, Any]] = {}
     for name in dependency_order(specs):
         spec = specs[name]
