@@ -13,7 +13,7 @@ RPM = "did.ENGINE_SPEED"
 BATT = "did.BATTERY_VOLTAGE"
 FUEL = "did.FUEL_LEVEL"
 ACCEL = "derived.vehicle_accel"
-GEAR = "derived.gear_estimate"
+RATIO = "derived.gearbox_ratio_measured"
 GYRO = "sensor.imu_gyro_y"
 
 
@@ -74,12 +74,10 @@ def test_shift_event_gap_in_the_middle_ends_the_search_and_two_events_are_found(
 # --- launch_event -----------------------------------------------------------------------------
 
 
-def _launch_feeds(speed_fn, gear_fn=lambda t: 0.0) -> dict:
+def _launch_feeds(speed_fn, ratio_fn=lambda t: 8.0) -> dict:
     return {
         SPEED: ramp(0, 5000, 100, speed_fn),
-        RPM: const_series(0, 5000, 100, 3000.0),
-        "did.THROTTLE_POS": const_series(0, 5000, 100, 30.0),
-        GEAR: ramp(0, 5000, 100, gear_fn),
+        RATIO: ramp(0, 5000, 100, ratio_fn),
     }
 
 
@@ -91,9 +89,16 @@ def test_launch_event_value_is_the_time_to_the_end_speed_and_the_row_is_at_the_e
     assert event_rows("launch_event", _launch_feeds(_off_from_rest)) == [(1300, 200.0, None)]
 
 
-def test_launch_event_ends_when_first_gear_is_matched():
-    f = _launch_feeds(_off_from_rest, lambda t: 1.0 if t >= 1200 else 0.0)
+def test_launch_event_ends_when_the_ratio_reaches_first_gear(monkeypatch):
+    first = 3.416  # const.gear_ratio_1
+    f = _launch_feeds(_off_from_rest, lambda t: first * 1.03 if t >= 1200 else 8.0)
     assert event_rows("launch_event", f) == [(1200, 100.0, None)]
+    far = _launch_feeds(_off_from_rest, lambda t: first * 1.2 if t >= 1200 else 8.0)
+    assert event_rows("launch_event", far) == [(1300, 200.0, None)]  # end speed instead
+    patch_const(monkeypatch, "derived_gear_ratio_tolerance", 0.25)
+    assert event_rows("launch_event", far) == [(1200, 100.0, None)]
+    patch_const(monkeypatch, "gear_ratio_1", 5.0)
+    assert event_rows("launch_event", f) == [(1300, 200.0, None)]
 
 
 def test_launch_event_near_misses_and_a_gap_yield_nothing():

@@ -15,7 +15,7 @@ organization; see `vehicle-defs/docs/ARCHITECTURE.md` for the platform picture.
 ## Setup
 
 ```bash
-git submodule update --init --recursive   # external/vehicle-defs, pinned to v0.23.0
+git submodule update --init --recursive   # external/vehicle-defs, pinned to v0.24.0
 uv sync                                    # installs runtime + dev dependencies
 ```
 
@@ -83,7 +83,7 @@ top-level folder -- see the session contract the phone app writes to.
 Example `/sessions/{id}/summary` response (one scalar, one binned signal; other signals elided):
 
 ```json
-{"session_id": "20260115-120000-abcd", "ride_definition": "session", "defs_version": "v0.23.0",
+{"session_id": "20260115-120000-abcd", "ride_definition": "session", "defs_version": "v0.24.0",
  "signals": [
    {"name": "ride_distance", "status": "computed", "unit": "km", "range": [0.0, 2000.0],
     "kind": "scalar", "value": 12.3, "flag": null},
@@ -324,7 +324,7 @@ C across rides, D server only). Until rt-core exists the Python reference in
   0 with RPM above 0 and ends at the first later speed above 0 (value = seconds, row time =
   the end); a gap in the speed samples above the speed DID's own `stale_after_ms` (D-087) or a stop still open at
   the end gives no event. The range check applies to events too.
-- D-103 (vehicle-defs v0.23.0): 21 more class-A signals in `d103_states.py` (`clutch_state`,
+- D-103 (vehicle-defs v0.23.0, wiring fixes in v0.24.0): 21 more class-A signals in `d103_states.py` (`clutch_state`,
   `clutch_slip_ratio`, `neutral_coasting_state`, `engine_braking_phase`, `over_rev`, `lugging`,
   `cold_engine_abuse`), `d103_windows.py` (`idle_rpm_std`, `idle_rpm_drift`,
   `charging_plateau_voltage`, `fuel_level_filtered`, `road_roughness`, `heat_soak_delta`,
@@ -337,10 +337,12 @@ C across rides, D server only). Until rt-core exists the Python reference in
   ambiguous the function docstring names the reading taken. New flags: `not_moving`, `no_gear`,
   `not_applicable`, `no_data`, `no_step`, `starts_warm`, `never_warm`, `no_steady_samples`.
   `road_roughness` band-passes the IMU vertical acceleration with a first-order high-pass and
-  low-pass (bilinear sections, pure Python). Class-A signals left `not_implemented` with a
-  reason (`NOT_IMPLEMENTED_REASONS_A` in `d103_common.py`): `wheel_slip`,
-  `volumetric_efficiency`, `intake_flow_residual`, `data_quality_mask` (defs gaps, see the
-  reasons).
+  low-pass (bilinear sections, pure Python). defs v0.24.0 completed the inputs and rules of
+  `wheel_slip`, `launch_event` (measured ratio against `gear_ratio_1`), `volumetric_efficiency`
+  (R_air = 287.05 J/(kg K), a physical constant), `intake_flow_residual` (new constant
+  `intake_flow_residual_ve_reference_pct`) and the class-B summaries below. Only
+  `data_quality_mask` stays `not_implemented` among class A (`NOT_IMPLEMENTED_REASONS_A` in
+  `d103_common.py`: bit layout undefined).
 - Not computed (`not_implemented`): the class-A signals without a formula (missing thresholds
   or constants or defs gaps), and class C/D; signals with `ready_phase0:
   false` or `pending_inputs` (`not_ready`, never evaluated).
@@ -402,10 +404,11 @@ D-087; sensors: `SENSORS` `stale_after_ms`), so a gap adds nothing. A value outs
   `ride_unanswered_did_count` and the usage of the new class-A signals (`ride_heat_soak_max`,
   `ride_cranking_dip`, `ride_rest_voltage`, `ride_cold_abuse_time`, `ride_over_rev_time`,
   `ride_lugging_time`, `ride_idle_rpm_std`, `ride_idle_rpm_drift`, `ride_shift_count`,
-  `ride_launch_count`). Thresholds come from the constants file, as for class A.
-- `not_implemented` with a `reason`: `ride_fan_on_temperature` (the rule needs a steady-RPM
-  condition without input or threshold), `ride_final_drive_ratio` (needs the nominal gear
-  ratios, not declared), `ride_tester_nrc78_count` (needs the rttDid, not declared),
+  `ride_launch_count`), plus (v0.24.0) `ride_fan_on_temperature` and `ride_final_drive_ratio`
+  (`per_gear`: one row per gear in `parquet/derived_summary.parquet`, `cell` = gear - 1, and
+  `kind: "per_gear"` in `/sessions/{id}/summary`; not a `/rides` scalar). Thresholds come from
+  the constants file, as for class A.
+- `not_implemented` with a `reason`: `ride_tester_nrc78_count` (needs a per-rttDid sensor),
   `coast_down_cda` and `coast_down_rolling_resistance` (no coast-down speed band), and the
   D-079 window signals. `ready_phase0: false` / `pending_inputs`
   signals are `not_ready`; absent inputs are `missing_inputs` (with the list).
@@ -433,7 +436,7 @@ vehicle-rt-core host tests:
 uv run vehicle-server golden --out <vehicle-rt-core>/tests/host/vectors   # also python -m vehicle_server.derived.golden
 ```
 
-- Defs version: the headers record the defs version they were generated from (v0.23.0 now).
+- Defs version: the headers record the defs version they were generated from (v0.24.0 now).
   The expected outputs use that version's derived `stale_after_ms` (the age limit of a
   derived input; a DID input uses the DID's own limit, D-070), which changed in v0.14.0, so rt-core's derived-module test needs a
   defs pin with the same derived table (v0.14.0 or later); against v0.13.0 the torque and

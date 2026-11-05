@@ -84,6 +84,7 @@ FLAG_ORDER = (
     "starts_warm",
     "never_warm",
     "no_steady_samples",
+    "no_fan_step",
 )
 
 
@@ -416,6 +417,8 @@ def _start_tweak(t: float, v: dict[str, float]) -> None:
     if v["RELATIVE_ACCEL_PEDAL_POS"] == 0.0:  # closed throttle plate
         v["THROTTLE_POS"] = 1.0
     v["FUEL_LEVEL"] = 40.0 if t < 14.0 else 70.0
+    if t >= 60.0:  # the cooling fan switches on at rest: a 0.3 V step in the battery voltage
+        v["BATTERY_VOLTAGE"] -= 0.3
 
 
 _START_PROFILE = Profile(
@@ -474,8 +477,8 @@ SCENARIOS = (
     Scenario(
         "start_idle_refuel",
         "Cold key-on, cranking start, launch, braking, rest with a fuel top-up, a second move, "
-        "then warm idle with the coolant above the operating temperature (D-103 start, "
-        "launch, braking, refuel, idle statistics) (90 s).",
+        "then warm idle with the coolant above the operating temperature and a cooling-fan voltage "
+        "step (D-103 start, launch, braking, refuel, idle statistics, fan) (90 s).",
         90_000,
         make_model(_START_PROFILE),
     ),

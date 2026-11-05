@@ -21,6 +21,14 @@ IMPLEMENTED = [
 ]
 
 
+# Inputs the defs declare although the "Rule (D-103 ...)" sentence does not use them (reported to
+# vehicle-defs). The audit lists them here instead of faking a read.
+KNOWN_UNUSED: dict[str, set[str]] = {
+    "ride_warmup_time": {"did.RUN_TIME_SINCE_START"},
+    "ride_final_drive_ratio": {"did.THROTTLE_POS", "const.primary_reduction_ratio"},
+}
+
+
 class RecordingEnv(summary.SummaryEnv):
     """SummaryEnv that records every declared input a summary asks for."""
 
@@ -78,8 +86,8 @@ def declared_but_unread(name: str) -> set[str]:
     try:
         summary.SUMMARIES[name].fn(env)
     except InputInvalid:
-        pass  # the synthetic data may not satisfy a rule; every input must be read before that
-    return set(env.inputs) - env.accessed
+        pass  # the synthetic data may not satisfy a rule; the reads happen before that
+    return set(env.inputs) - env.accessed - KNOWN_UNUSED.get(name, set())
 
 
 @pytest.mark.parametrize("name", IMPLEMENTED)

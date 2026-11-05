@@ -220,10 +220,10 @@ def test_other_classes_events_and_unimplemented_signals_are_not_implemented():
     }
     assert coverage["ride_distance"]["status"] == engine.NOT_IMPLEMENTED
     assert coverage["shift_event"]["status"] == engine.MISSING_INPUTS  # D-103 events are computed
-    assert coverage["wheel_slip"] == {
+    assert coverage["data_quality_mask"] == {
         "class": "A",
         "status": engine.NOT_IMPLEMENTED,
-        "reason": NOT_IMPLEMENTED_REASONS_A["wheel_slip"],
+        "reason": NOT_IMPLEMENTED_REASONS_A["data_quality_mask"],
     }
     assert coverage["stop_event"]["status"] == engine.MISSING_INPUTS  # events are computed now
     assert coverage["clutch_state"]["status"] == engine.MISSING_INPUTS
@@ -362,12 +362,7 @@ def test_every_event_signal_has_a_formula():
 
 def test_class_a_signals_left_out_of_d103_report_their_reason():
     coverage = engine.evaluate(FakeInputs({})).coverage
-    assert set(NOT_IMPLEMENTED_REASONS_A) == {
-        "wheel_slip",
-        "volumetric_efficiency",
-        "intake_flow_residual",
-        "data_quality_mask",
-    }
+    assert set(NOT_IMPLEMENTED_REASONS_A) == {"data_quality_mask"}
     for name, reason in NOT_IMPLEMENTED_REASONS_A.items():
         assert coverage[name]["status"] == engine.NOT_IMPLEMENTED
         assert coverage[name]["reason"] == reason

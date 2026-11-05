@@ -15,9 +15,13 @@ from vehicle_server.derived.d103_common import (
     _BATT,
     _COOLANT,
     _FUEL_LEVEL,
+    _GPS_ACCURACY,
+    _GPS_FIX,
+    _GPS_SPEED,
     _IAT,
     _IDLE_MAX,
     _IDLE_MIN,
+    _MAF,
     _MAP,
     _MOVING_MIN,
     _OPERATING,
@@ -28,7 +32,8 @@ from vehicle_server.derived.d103_common import (
     FLAG_NOT_APPLICABLE,
     _require_moving,
 )
-from vehicle_server.derived.formulas import Outcome, _point, _series
+from vehicle_server.derived.formulas import FLAG_ENGINE_OFF, Outcome, _point, _series
+from vehicle_server.gps_fix import usable_fix_values
 
 # --- LR15-2: windows and residuals -------------------------------------------------------------
 
@@ -58,6 +63,18 @@ def _warm_idle_points(env: Env) -> list[tuple[int, float]]:
 
 def _window_slice(times: list[int], t: int, window_ms: int) -> tuple[int, int]:
     return bisect_right(times, t - window_ms), bisect_right(times, t)
+
+
+# Physical constant of the D-103 speed-density rule: specific gas constant of dry air,
+# J/(kg K), as the defs write it (R_air = 287.05; not a threshold). Unit conversions follow.
+SPECIFIC_GAS_CONSTANT_AIR_VE = 287.05
+_KELVIN_OFFSET = 273.15
+_PA_PER_KPA = 1000.0
+_M3_PER_CM3 = 1.0e-6
+_G_PER_KG = 1000.0
+_MPS_TO_KMH = 3.6
+# One intake stroke per two crankshaft revolutions (four-stroke): rpm / 120 per second.
+_REVOLUTIONS_PER_INTAKE = 120.0
 
 
 @_series("idle_rpm_std")
@@ -240,3 +257,60 @@ def idle_map_residual(at: At) -> float:
     ):
         raise InputInvalid(FLAG_NOT_APPLICABLE)
     return pressure - at.const("const.idle_map_residual_expected_kpa")
+
+
+@_point("wheel_slip")
+def wheel_slip(at: At) -> float:
+    """(ECU speed - GNSS speed) / GNSS speed x 100, positive = the ECU speed is above the GNSS
+    speed. Only with a usable fix (3D or dead reckoning, a 2D fix does not count, D-099),
+    gps_speed_accuracy <= derived_gnss_speed_accuracy_max_mps, VEHICLE_SPEED >
+    wheel_slip_speed_min_kmh and |vehicle_accel| > wheel_slip_accel_min_mps2; otherwise null,
+    flag not_applicable. A GNSS speed of 0 cannot be a reference (not_applicable). Speed only,
+    never a position."""
+    ecu = at.value(_SPEED)
+    gnss = at.value(_GPS_SPEED) * _MPS_TO_KMH
+    accuracy = at.value(_GPS_ACCURACY)
+    fix = at.value(_GPS_FIX)
+    acceleration = at.value(_ACCEL)
+    if (
+        fix not in usable_fix_values()
+        or accuracy > at.const("const.derived_gnss_speed_accuracy_max_mps")
+        or ecu <= at.const("const.wheel_slip_speed_min_kmh")
+        or abs(acceleration) <= at.const("const.wheel_slip_accel_min_mps2")
+        or gnss <= 0
+    ):
+        raise InputInvalid(FLAG_NOT_APPLICABLE)
+    return (ecu - gnss) / gnss * 100.0
+
+
+def _theoretical_air_flow(at: At) -> float:
+    """rho x displacement x ENGINE_SPEED / 120, g/s: the full-cylinder air flow of a
+    four-stroke engine (one intake per two revolutions) at the manifold density
+    rho = INTAKE_MAP / (R_air x INTAKE_AIR_TEMP) in kg/m3 (ideal gas, dry air)."""
+    rpm = at.value(_RPM)
+    if rpm <= 0:
+        raise InputInvalid(FLAG_ENGINE_OFF)
+    density = (
+        at.value(_MAP)
+        * _PA_PER_KPA
+        / (SPECIFIC_GAS_CONSTANT_AIR_VE * (at.value(_IAT) + _KELVIN_OFFSET))
+    )
+    displacement_m3 = at.const("const.engine_displacement_cm3") * _M3_PER_CM3
+    return density * displacement_m3 * rpm / _REVOLUTIONS_PER_INTAKE * _G_PER_KG
+
+
+@_point("volumetric_efficiency")
+def volumetric_efficiency(at: At) -> float:
+    """VE = MAF_RATE / (rho x displacement x ENGINE_SPEED / 120) x 100 (speed-density, D-103
+    rule; MAF_RATE in g/s, the engine off is null, flag engine_off)."""
+    return at.value(_MAF) / _theoretical_air_flow(at) * 100.0
+
+
+@_point("intake_flow_residual")
+def intake_flow_residual(at: At) -> float:
+    """(MAF_RATE - expected) / expected x 100 with expected = intake_flow_residual_ve_reference_pct
+    / 100 x rho x displacement x ENGINE_SPEED / 120 (g/s)."""
+    expected = (
+        at.const("const.intake_flow_residual_ve_reference_pct") / 100.0 * _theoretical_air_flow(at)
+    )
+    return (at.value(_MAF) - expected) / expected * 100.0

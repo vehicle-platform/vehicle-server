@@ -1,10 +1,11 @@
 """Shared pieces of the D-103 class-A signals (d103_states, d103_windows, d103_events).
 
-vehicle-defs v0.23.0 (D-103) gave each of these signals a "Rule (D-103, provisional)" sentence
-in its description and declared every threshold as a `const.*` input. This module implements
-the sentence as written. Every threshold, band, window or reference value is read from its
-declared constant (`at.const(...)` / `env.const(...)`), so a later defs release changes the
-results without a code change. The only literals are unit conversions and 0/1.
+vehicle-defs v0.23.0 (D-103; wiring fixes in v0.24.0) gave each of these signals a
+"Rule (D-103, provisional)" sentence in its description and declared every threshold as a
+`const.*` input. These modules implement the sentence as written. Every threshold, band,
+window or reference value is read from its declared constant (`at.const(...)` /
+`env.const(...)`), so a later defs release changes the results without a code change. The
+only literals are unit conversions and 0/1.
 
 Where a sentence is ambiguous the simplest literal reading is taken and written in the
 docstring of the function. The three modules register their formulas in formulas.FORMULAS
@@ -28,16 +29,6 @@ FLAG_NOT_APPLICABLE = "not_applicable"
 
 # Class-A signals of the D-103 batch that stay not_implemented, with the reason.
 NOT_IMPLEMENTED_REASONS_A: dict[str, str] = {
-    "wheel_slip": (
-        "definition: the rule needs |vehicle_accel|, which is not a declared input of wheel_slip"
-    ),
-    "volumetric_efficiency": (
-        "definition: speed-density needs a measured air flow; MAF_RATE is not a declared input"
-    ),
-    "intake_flow_residual": (
-        "definition: the speed-density estimate needs a volumetric efficiency reference "
-        "that defs does not give"
-    ),
     "data_quality_mask": (
         "definition: bit layout of the mask is not defined and the DID ages/states are not inputs"
     ),
@@ -57,6 +48,10 @@ _AMBIENT = "did.AMBIENT_AIR_TEMP"
 _RATIO = "derived.gearbox_ratio_measured"
 _GEAR = "derived.gear_estimate"
 _ACCEL = "derived.vehicle_accel"
+_MAF = "did.MAF_RATE"
+_GPS_SPEED = "sensor.gps_ground_speed"
+_GPS_ACCURACY = "sensor.gps_speed_accuracy"
+_GPS_FIX = "sensor.gps_fix_type"
 _GYRO_Y = "sensor.imu_gyro_y"
 _ACCEL_Z = "sensor.imu_accel_z"
 

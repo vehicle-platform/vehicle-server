@@ -126,8 +126,6 @@ def test_not_implemented_reasons_cover_every_ready_class_b_signal_without_a_summ
 def test_exact_reasons():
     reasons = NOT_IMPLEMENTED_REASONS
     assert set(reasons) - {n for n in reasons if n.startswith("window_")} == {
-        "ride_fan_on_temperature",
-        "ride_final_drive_ratio",
         "ride_tester_nrc78_count",
         "coast_down_cda",
         "coast_down_rolling_resistance",

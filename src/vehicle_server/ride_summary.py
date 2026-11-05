@@ -155,6 +155,18 @@ def _binned_entry(
     return response
 
 
+def _per_gear_entry(name: str, rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """A `per_gear` summary: one value per gear (stored cell = gear - 1)."""
+    gears = [
+        {"gear": row["cell"] + 1, "value": row.get("value"), "flag": row.get("flag")}
+        for row in sorted(
+            (r for r in rows if r.get("signal") == name and isinstance(r.get("cell"), int)),
+            key=lambda r: r["cell"],
+        )
+    ]
+    return {"kind": "per_gear", "gears": gears}
+
+
 def _signal_entry(
     name: str,
     entry: dict[str, Any],
@@ -175,6 +187,8 @@ def _signal_entry(
         "unit": spec["unit"],
         "range": list(spec["range"]),
     }
+    if spec.get("per_gear"):
+        return {**base, **_per_gear_entry(name, rows)}
     bins = list(spec.get("bins") or [])
     if bins:
         return {
@@ -216,7 +230,8 @@ def load_ride_summary(session_dir: Path, session_id: str) -> dict[str, Any]:
     report = _read_report(session_dir)
     stored = _entry_signals(_summary_block(report))
     needs_rows = any(
-        stored.get(name, {}).get("status") == "computed" and spec.get("bins")
+        stored.get(name, {}).get("status") == "computed"
+        and (spec.get("bins") or spec.get("per_gear"))
         for name, spec in vehicle_derived.SIGNALS.items()
         if name in stored
     )
@@ -229,7 +244,7 @@ def scalar_names() -> list[str]:
     return [
         name
         for name, spec in vehicle_derived.SIGNALS.items()
-        if spec["class"] == "B" and not spec.get("bins")
+        if spec["class"] == "B" and not spec.get("bins") and not spec.get("per_gear")
     ]
 
 
@@ -246,7 +261,10 @@ def select_scalar_names(names: str | None) -> list[str]:
         for name in requested
         if name in vehicle_derived.SIGNALS
         and vehicle_derived.SIGNALS[name]["class"] == "B"
-        and vehicle_derived.SIGNALS[name].get("bins")
+        and (
+            vehicle_derived.SIGNALS[name].get("bins")
+            or vehicle_derived.SIGNALS[name].get("per_gear")
+        )
     ]
     unknown = [name for name in requested if name not in available and name not in binned]
     if unknown:

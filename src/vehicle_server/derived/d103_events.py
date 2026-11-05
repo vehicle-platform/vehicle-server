@@ -11,10 +11,10 @@ from vehicle_server.derived.d103_common import (
     _ACCEL,
     _BATT,
     _FUEL_LEVEL,
-    _GEAR,
     _GYRO_Y,
     _IDLE_MIN,
     _MOVING_MIN,
+    _RATIO,
     _RPM,
     _SPEED,
     _speed_at,
@@ -67,17 +67,17 @@ def shift_event(env: Env) -> list[EventRow]:
 def launch_event(env: Env) -> list[EventRow]:
     """Moving off from rest. It starts at the speed sample that is above
     derived_moving_speed_min_kmh when the previous sample was not; it ends at the first later
-    sample where the speed is above launch_event_end_speed_kmh or gear_estimate is 1. The
-    value is the time from start to end (ms), the row is at the end.
-
-    Reading: "the measured ratio is within derived_gear_ratio_tolerance of gear 1" is read as
-    gear_estimate == 1 (the declared input that carries the measured ratio's match); that
-    estimate uses its own fixed match tolerance, derived_gear_ratio_tolerance cannot be
-    applied (the measured ratio is not a declared input). A launch that falls back to rest
-    before it ends, or a gap in the speed samples above the speed's stale_after_ms, yields
-    nothing. THROTTLE_POS and ENGINE_SPEED are declared, not used."""
+    sample where the speed is above launch_event_end_speed_kmh or the measured gearbox ratio
+    (fresh at that time) is within derived_gear_ratio_tolerance of gear_ratio_1. "Within" is a
+    relative distance, |measured / gear_ratio_1 - 1| <= tolerance (as clutch_state). The value
+    is the time from start to end (ms), the row is at the end. A launch that falls back to
+    rest before it ends, or a gap in the speed samples above the speed's stale_after_ms,
+    yields nothing. ENGINE_SPEED, THROTTLE_POS, gear_estimate and gear_ratio_2..6 are declared
+    by the defs but the rule does not use them."""
     moving = env.const(_MOVING_MIN)
     end_speed = env.const("const.launch_event_end_speed_kmh")
+    tolerance = env.const("const.derived_gear_ratio_tolerance")
+    first_gear = env.const("const.gear_ratio_1")
     speed = env.feed(_SPEED)
     events: list[EventRow] = []
     start: int | None = None
@@ -90,10 +90,10 @@ def launch_event(env: Env) -> list[EventRow]:
             start, previous_v = None, None
         if start is not None:
             try:
-                first_gear = At(env, t).value(_GEAR) == 1
+                in_first = abs(At(env, t).value(_RATIO) / first_gear - 1.0) <= tolerance
             except InputInvalid:
-                first_gear = False
-            if v > end_speed or first_gear:
+                in_first = False
+            if v > end_speed or in_first:
                 events.append((t, float(t - start), None))
                 start = None
             elif v <= moving:
@@ -248,7 +248,12 @@ def cranking_dip(env: Env) -> list[EventRow]:
             start, zero_t = t, None
         if start is not None and v > idle_min:
             lo, hi = bisect_left(batt.times, start), bisect_right(batt.times, t)
-            lows = [b for b in batt.values[lo:hi] if b is not None]
+            lows = []
+            for battery_t in batt.times[lo:hi]:
+                try:
+                    lows.append(At(env, battery_t).value(_BATT))
+                except InputInvalid:
+                    continue
             if lows:
                 events.append((t, min(lows), None))
             start = None
@@ -257,10 +262,9 @@ def cranking_dip(env: Env) -> list[EventRow]:
 
 @_event("battery_rest_voltage")
 def battery_rest_voltage(env: Env) -> list[EventRow]:
-    """The BATTERY_VOLTAGE before the crank. The description has no rule sentence; the
-    reading: at each start (ENGINE_SPEED from 0 to above 0) the value is the battery voltage
-    fresh at the last sample with ENGINE_SPEED 0 before it, the row is at the first sample
-    above 0. A start without a fresh voltage at that moment yields nothing."""
+    """The BATTERY_VOLTAGE sample fresh at the last ENGINE_SPEED = 0 sample before a start
+    (ENGINE_SPEED from 0 to above 0), one event per start (D-103 rule). The row is at the first
+    sample above 0. A start without a fresh voltage at that moment yields nothing."""
     events: list[EventRow] = []
     for zero_t, start_t, _ in _engine_starts(env):
         try:

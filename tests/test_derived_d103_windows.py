@@ -222,3 +222,94 @@ def test_idle_map_residual_at_closed_throttle_in_the_idle_band(monkeypatch):
     stale = feeds()
     stale["did.INTAKE_MAP"] = ([0], [40.0])
     assert outcome("idle_map_residual", stale, 20000) == (None, "stale_input")
+
+
+# --- wheel_slip -------------------------------------------------------------------------------
+
+GPS_SPEED = "sensor.gps_ground_speed"
+GPS_ACCURACY = "sensor.gps_speed_accuracy"
+GPS_FIX = "sensor.gps_fix_type"
+
+
+def _slip(ecu=100.0, gnss_mps=25.0, fix=3.0, accuracy=0.1, accel=2.0) -> dict:
+    return {
+        SPEED: const_series(0, 1000, 100, ecu),
+        GPS_SPEED: const_series(0, 1000, 100, gnss_mps),
+        GPS_ACCURACY: const_series(0, 1000, 100, accuracy),
+        GPS_FIX: const_series(0, 1000, 100, fix),
+        ACCEL: const_series(0, 1000, 100, accel),
+    }
+
+
+def test_wheel_slip_is_the_relative_speed_difference_with_a_good_fix(monkeypatch):
+    value, flag = outcome("wheel_slip", _slip(), 500)
+    assert flag is None and value == pytest.approx((100.0 - 90.0) / 90.0 * 100.0)
+    assert outcome("wheel_slip", _slip(ecu=80.0), 500)[0] == pytest.approx(-11.1111, abs=1e-3)
+    for kwargs in (
+        {"fix": 2.0},
+        {"accuracy": 0.5},
+        {"ecu": 5.0},
+        {"accel": 1.0},
+        {"gnss_mps": 0.0},
+    ):
+        assert outcome("wheel_slip", _slip(**kwargs), 500) == (None, "not_applicable")
+    assert outcome("wheel_slip", _slip(fix=4.0), 500)[1] is None  # dead reckoning counts
+    patch_const(monkeypatch, "wheel_slip_accel_min_mps2", 3.0)
+    assert outcome("wheel_slip", _slip(), 500) == (None, "not_applicable")
+    patch_const(monkeypatch, "wheel_slip_accel_min_mps2", 1.5)
+    patch_const(monkeypatch, "wheel_slip_speed_min_kmh", 120.0)
+    assert outcome("wheel_slip", _slip(), 500) == (None, "not_applicable")
+    patch_const(monkeypatch, "wheel_slip_speed_min_kmh", 10.0)
+    patch_const(monkeypatch, "derived_gnss_speed_accuracy_max_mps", 0.05)
+    assert outcome("wheel_slip", _slip(), 500) == (None, "not_applicable")
+
+
+def test_wheel_slip_stale_input_is_null():
+    f = _slip()
+    f[GPS_SPEED] = ([0], [25.0])
+    assert outcome("wheel_slip", f, 500) == (None, "stale_input")
+
+
+# --- volumetric_efficiency and intake_flow_residual -------------------------------------------
+
+R_AIR = 287.05
+
+
+def _air(map_kpa=60.0, rpm=3000.0, iat=25.0, maf=3.5) -> dict:
+    return {
+        "did.INTAKE_MAP": const_series(0, 1000, 100, map_kpa),
+        RPM: const_series(0, 1000, 100, rpm),
+        "did.INTAKE_AIR_TEMP": const_series(0, 1000, 100, iat),
+        "did.MAF_RATE": const_series(0, 1000, 100, maf),
+    }
+
+
+def _theoretical(map_kpa=60.0, rpm=3000.0, iat=25.0, displacement_cm3=249.0) -> float:
+    """g/s of the full-cylinder flow by hand: rho x displacement (m3) x rpm / 120 x 1000."""
+    rho = map_kpa * 1000.0 / (R_AIR * (iat + 273.15))
+    return rho * displacement_cm3 * 1e-6 * rpm / 120.0 * 1000.0
+
+
+def test_volumetric_efficiency_is_the_measured_over_the_full_cylinder_flow(monkeypatch):
+    value, flag = outcome("volumetric_efficiency", _air(), 500)
+    assert flag is None and value == pytest.approx(3.5 / _theoretical() * 100.0)
+    assert 70.0 < value < 110.0  # a plausible value for these inputs
+    patch_const(monkeypatch, "engine_displacement_cm3", 300)
+    assert outcome("volumetric_efficiency", _air(), 500)[0] == pytest.approx(
+        3.5 / _theoretical(displacement_cm3=300.0) * 100.0
+    )
+    assert outcome("volumetric_efficiency", _air(rpm=0.0), 500) == (None, "engine_off")
+
+
+def test_intake_flow_residual_is_relative_to_the_reference_ve(monkeypatch):
+    expected = 0.85 * _theoretical()
+    value, flag = outcome("intake_flow_residual", _air(), 500)
+    assert flag is None and value == pytest.approx((3.5 - expected) / expected * 100.0)
+    patch_const(monkeypatch, "intake_flow_residual_ve_reference_pct", 100.0)
+    expected = _theoretical()
+    assert outcome("intake_flow_residual", _air(), 500)[0] == pytest.approx(
+        (3.5 - expected) / expected * 100.0
+    )
+    stale = _air()
+    stale["did.MAF_RATE"] = ([0], [3.5])
+    assert outcome("intake_flow_residual", stale, 20000) == (None, "stale_input")

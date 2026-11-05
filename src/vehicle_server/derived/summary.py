@@ -84,9 +84,16 @@ class Binned:
     outside_s: float = 0.0
 
 
+@dataclass
+class PerGear:
+    """Result of a `per_gear` summary: one outcome per gear, gear 1 first (cell = gear - 1)."""
+
+    cells: list[Outcome]
+
+
 @dataclass(frozen=True)
 class Summary:
-    fn: Callable[[SummaryEnv], Outcome | Binned]
+    fn: Callable[[SummaryEnv], Outcome | Binned | PerGear]
 
 
 SUMMARIES: dict[str, Summary] = {}
@@ -107,16 +114,8 @@ def _input_not_implemented(name: str) -> str:
 # Reason of every class-B signal that has no summary yet (the README lists them too).
 _COAST_DOWN_REASON = "definition: coast-down speed band not defined (D-103 gave none)"
 NOT_IMPLEMENTED_REASONS: dict[str, str] = {
-    "ride_fan_on_temperature": (
-        "definition: the rule needs a steady-RPM condition; ENGINE_SPEED is not a declared input "
-        "and no steady-RPM threshold exists"
-    ),
-    "ride_final_drive_ratio": (
-        "definition: turning the measured ratio into a final-drive ratio needs the nominal gear "
-        "ratios (const.gear_ratio_N are not declared inputs)"
-    ),
     "ride_tester_nrc78_count": (
-        "definition: the rule sums per rttDid, rttDid is not a declared input"
+        "definition: the rule sums per rttDid, which is not a declared (sensor) input"
     ),
     "coast_down_cda": _COAST_DOWN_REASON,
     "coast_down_rolling_resistance": _COAST_DOWN_REASON,
@@ -483,9 +482,20 @@ def _summarize_one(
 ) -> dict[str, Any]:
     unit, rng = spec["unit"], list(spec["range"])
     try:
-        outcome: Outcome | Binned = summary.fn(env)
+        outcome: Outcome | Binned | PerGear = summary.fn(env)
     except InputInvalid as exc:
         outcome = (None, exc.flag)
+    if isinstance(outcome, PerGear):
+        gears = [_checked(value, flag, rng) for value, flag in outcome.cells]
+        for index, (value, flag) in enumerate(gears):
+            result.rows.append(SummaryRow(name, unit, index, [], value, flag))
+        return {
+            "status": COMPUTED,
+            "unit": unit,
+            "per_gear": True,
+            "gears": len(gears),
+            "valid_gears": sum(v is not None for v, _ in gears),
+        }
     if isinstance(outcome, Binned):
         cells = [_checked(value, flag, rng) for value, flag in outcome.cells]
         for index, (value, flag) in enumerate(cells):

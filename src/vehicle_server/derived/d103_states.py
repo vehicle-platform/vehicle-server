@@ -4,7 +4,7 @@ its defs description; thresholds come from the declared const.* inputs."""
 
 from __future__ import annotations
 
-from vehicle_server.derived.context import At, InputInvalid
+from vehicle_server.derived.context import FLAG_INVALID_INPUT, At, InputInvalid
 from vehicle_server.derived.d103_common import (
     _COOLANT,
     _FUEL_RATE,
@@ -80,7 +80,7 @@ def neutral_coasting_state(at: At) -> float:
     try:
         gear = at.value(_GEAR)
     except InputInvalid as exc:
-        if exc.flag != "invalid_input":
+        if exc.flag != FLAG_INVALID_INPUT:
             raise
         return 1.0
     if gear < 1:

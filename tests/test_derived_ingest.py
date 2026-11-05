@@ -258,9 +258,10 @@ def test_ingest_writes_the_ride_summary_parquet_and_report_block(
     assert binned["total_s"] == pytest.approx(0.31) and binned["outside_s"] == 0.0
     assert "value" not in binned and "values" not in binned
     thermal = block["records"]["RIDE_THERMAL"]["signals"]
-    assert thermal["ride_fan_on_temperature"] == {
+    health = block["records"]["RIDE_ECU_HEALTH"]["signals"]
+    assert health["ride_tester_nrc78_count"] == {
         "status": "not_implemented",
-        "reason": NOT_IMPLEMENTED_REASONS["ride_fan_on_temperature"],
+        "reason": NOT_IMPLEMENTED_REASONS["ride_tester_nrc78_count"],
     }
     assert thermal["ride_warmup_time"]["status"] == "missing_inputs"
     assert thermal["ride_oil_time_at_temp"]["status"] == "missing_inputs"
