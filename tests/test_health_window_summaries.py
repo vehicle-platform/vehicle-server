@@ -9,6 +9,7 @@ import pytest
 from vehicle_server.defs import vehicle_derived
 from vehicle_server.derived import engine, summary
 from vehicle_server.derived.health_window_summaries import FLAG_NO_WINDOW
+from vehicle_server.derived.health_windows import WindowInstance
 
 from .derived_helpers import FakeInputs, const_series, patch_const
 
@@ -100,6 +101,16 @@ def test_every_computed_window_signal_on_one_synthetic_ride():
     for name, value in expected.items():
         assert _value(result, name) == (pytest.approx(value), None), name
     assert _value(result, "window_post_stop_coolant_tau")[0] == pytest.approx(TAU_S, rel=1e-6)
+
+
+def test_evaluation_keeps_the_window_results_the_scalars_use():
+    result = _run(*_ride())
+
+    warm = result.windows["W3_WARM_IDLE"]
+    assert warm.first_qualifying == WindowInstance(3_000, 30_000, "condition", True)
+    assert warm.qualifying_count == 1
+    assert _value(result, "window_warm_idle_rpm_spread") == (100.0, None)
+    assert _value(result, "window_warm_idle_count") == (1.0, None)
 
 
 def test_no_qualifying_window_reports_no_window():
