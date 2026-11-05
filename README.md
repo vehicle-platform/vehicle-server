@@ -431,7 +431,9 @@ instance qualifies when its duration is at least `min_duration_ms` (a `max_durat
 also qualifies); condition windows re-arm only after their conditions were not met at least
 once. Values use the valid samples inside the first qualifying instance, and
 `<window>_count` is the number of qualifying instances (0 when none). No held value and no
-GPS input is used. Computed (17): W1 `window_key_on_rest_voltage`,
+GPS input is used. Every evaluated window's instances are also stored in
+`derived_summary.health_windows` (shape below) and vehicle-analyzer view E renders them
+directly from `report.json`; the analyzer never recomputes a window. Computed (17): W1 `window_key_on_rest_voltage`,
 `window_key_on_sensor_spread`, `window_key_on_map_baro_delta`,
 `window_key_on_warm_restart`, `window_key_on_count`; W2 `window_crank_count`; W3
 `window_warm_idle_rpm_spread`, `window_warm_idle_rpm_drift`,
@@ -452,9 +454,17 @@ unchanged. If D-079 or the defs description differs from this reading, they win.
 (int64, null for scalars), `bin0_low`, `bin0_high`, `bin1_low`, `bin1_high` (float64, null when
 absent), `value` (float64, null when invalid), `unit`, `valid`, `flag`. The report's
 `derived_summary` block: `{defs_version, ride_definition, summary: {status: count}, records:
-{RECORD_NAME: {did, signals: {name: entry}}}}`; a scalar entry has `status` / `value` / `unit` /
+{RECORD_NAME: {did, signals: {name: entry}}}, health_windows: {rule, t0_device_ms, windows:
+{WINDOW_KEY: {qualifying_count, instances: [{start_ms, end_ms, duration_ms, close_reason,
+qualifies, first_qualifying}]}}}}`; a scalar entry has `status` / `value` / `unit` /
 `flag`, a binned one `status` / `unit` / `cells` / `nonzero_cells` / `total_s` / `outside_s`
-(no per-cell values), the others `reason` / `missing` / `message`. It is computed right after
+(no per-cell values), the others `reason` / `missing` / `message`. `health_windows` has one
+entry per evaluated window in `vehicle_derived.WINDOWS` order (currently W1..W5);
+`start_ms`/`end_ms`/`duration_ms` are on the `/series` `t0_device_ms` axis, so the first
+instance of W3 may show `3.0-30.0 s` in the text report. `instances` is `[]` when a window
+never opened; `first_qualifying` is true on exactly one instance when `qualifying_count > 0`
+and false on every instance otherwise. A failed summary evaluation stores no
+`health_windows` block. It is computed right after
 the class-A step; an exception is recorded as `derived_summary: {"error": ...}`, writes no file
 and never fails the ingest. The file is removed when there is no row. `vehicle-server derive`
 recomputes both files and prints one more line per session. There is no index column.
