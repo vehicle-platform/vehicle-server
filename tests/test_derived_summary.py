@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from vehicle_server.defs import vehicle_catalog, vehicle_cl250, vehicle_derived
+from vehicle_server.defs import vehicle_catalog, vehicle_cl250, vehicle_constants, vehicle_derived
 from vehicle_server.derived import engine, summary
 from vehicle_server.derived.context import Feed, InputInvalid
 from vehicle_server.derived.formulas import FORMULAS
@@ -15,6 +15,7 @@ from vehicle_server.gps_fix import fix_values_by_name, usable_fix_values
 from .derived_helpers import FakeInputs, const_series, ramp
 
 SPECS = vehicle_derived.SIGNALS
+UNSTORED_SENSORS = {"lean_angle"}
 CLASS_B = [name for name, spec in SPECS.items() if spec["class"] == "B"]
 SPEED_MPS = "sensor.gps_ground_speed"
 FIX = "sensor.gps_fix_type"
@@ -60,9 +61,14 @@ def test_every_summary_is_a_ready_class_b_signal_with_declared_resolvable_inputs
                 assert key in vehicle_catalog.SIGNALS, inp
             elif kind == "derived":
                 assert key in SPECS, inp
+            elif kind == "const":
+                assert key in vehicle_constants.CONSTANTS, inp
             else:
                 assert kind == "sensor" and key in vehicle_derived.SENSORS, inp
-                assert resolve_sensor(key) is not None, f"{inp} has no parquet column"
+                if key in UNSTORED_SENSORS:  # not stored: missing_inputs in a real session
+                    assert resolve_sensor(key) is None
+                else:
+                    assert resolve_sensor(key) is not None, f"{inp} has no parquet column"
         for axis in spec.get("bins") or []:
             assert axis["input"] in spec["inputs"]
         assert spec["record"] in vehicle_derived.RIDE_SUMMARY_RECORDS
@@ -119,12 +125,14 @@ def test_not_implemented_reasons_cover_every_ready_class_b_signal_without_a_summ
 
 def test_exact_reasons():
     reasons = NOT_IMPLEMENTED_REASONS
-    assert reasons["ride_warmup_time"] == "threshold: operating coolant temperature"
-    assert reasons["ride_final_drive_ratio"] == "threshold: steady cruise"
-    assert reasons["speedometer_error"] == reasons["effective_tyre_radius"]
-    assert reasons["ride_can_error_count"] == "definition: TEC/REC are levels, not error counts"
-    assert reasons["ride_shift_count"] == "input not implemented: derived.shift_event"
-    assert reasons["ride_heat_soak_max"] == "input not implemented: derived.heat_soak_delta"
+    assert set(reasons) - {n for n in reasons if n.startswith("window_")} == {
+        "ride_tester_nrc78_count",
+        "coast_down_cda",
+        "coast_down_rolling_resistance",
+    }
+    assert reasons["coast_down_cda"] == reasons["coast_down_rolling_resistance"]
+    assert reasons["coast_down_cda"].startswith("definition: coast-down speed band")
+    assert all(reason.startswith("definition:") for reason in reasons.values())
 
 
 def test_not_ready_and_missing_inputs():

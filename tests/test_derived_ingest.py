@@ -16,6 +16,7 @@ from vehicle_server.decode import IMU_HEADER
 from vehicle_server.defs import vehicle_derived
 from vehicle_server.derived import engine
 from vehicle_server.derived.inputs import SessionInputs, _to_series, _unwrap, resolve_sensor
+from vehicle_server.derived.summary import NOT_IMPLEMENTED_REASONS
 from vehicle_server.ingest import ingest_path, rederive_session
 from vehicle_server.report import render_text
 
@@ -257,10 +258,12 @@ def test_ingest_writes_the_ride_summary_parquet_and_report_block(
     assert binned["total_s"] == pytest.approx(0.31) and binned["outside_s"] == 0.0
     assert "value" not in binned and "values" not in binned
     thermal = block["records"]["RIDE_THERMAL"]["signals"]
-    assert thermal["ride_warmup_time"] == {
+    health = block["records"]["RIDE_ECU_HEALTH"]["signals"]
+    assert health["ride_tester_nrc78_count"] == {
         "status": "not_implemented",
-        "reason": "threshold: operating coolant temperature",
+        "reason": NOT_IMPLEMENTED_REASONS["ride_tester_nrc78_count"],
     }
+    assert thermal["ride_warmup_time"]["status"] == "missing_inputs"
     assert thermal["ride_oil_time_at_temp"]["status"] == "missing_inputs"
     assert "did.ENGINE_OIL_TEMP" in thermal["ride_oil_time_at_temp"]["missing"]
     assert block["records"]["RIDE_FUELING"]["signals"]["fuel_trim_map"]["status"] == "not_ready"

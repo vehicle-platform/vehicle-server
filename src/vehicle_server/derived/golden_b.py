@@ -53,6 +53,7 @@ SELECTION_RULE_B = (
 
 # Class-B signals that are skipped, with the reason (listed in the README and the report).
 SKIP_BINNED = "binned (multi-element, 2a is scalar-only)"
+SKIP_PER_GEAR = "per gear (multi-element, 2a is scalar-only)"
 SKIP_SENSOR = "sensor input (vectors carry DIDs only)"
 SKIP_NO_SUMMARY = "no summary in the reference"
 SKIP_NOT_READY = "not ready_rt_core / ready_phase0 / pending inputs"
@@ -130,6 +131,8 @@ def classify() -> tuple[dict[str, Mapping[str, Any]], dict[str, str]]:
             skipped[name] = SKIP_NOT_READY
         elif spec.get("bins"):
             skipped[name] = SKIP_BINNED
+        elif spec.get("per_gear"):
+            skipped[name] = SKIP_PER_GEAR
         else:
             selected[name] = spec
     for name, spec in selected.items():

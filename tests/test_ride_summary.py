@@ -461,3 +461,22 @@ def test_rides_skipped_counts_only_sessions_inside_the_range():
     body = ride_summary.build_rides(sessions, [], start, None)
     assert [row["session_id"] for row in body["rows"]] == ["in-ok"]
     assert body["skipped"] == 1
+
+
+def test_per_gear_summary_is_listed_per_gear_and_is_not_a_rides_scalar():
+    from vehicle_server import ride_summary
+
+    rows = [
+        {"signal": "ride_final_drive_ratio", "cell": 3, "value": 2.7, "flag": None},
+        {"signal": "ride_final_drive_ratio", "cell": 0, "value": None, "flag": "no_steady_samples"},
+        {"signal": "other", "cell": 0, "value": 1.0, "flag": None},
+    ]
+    entry = ride_summary._per_gear_entry("ride_final_drive_ratio", rows)
+    assert entry == {
+        "kind": "per_gear",
+        "gears": [
+            {"gear": 1, "value": None, "flag": "no_steady_samples"},
+            {"gear": 4, "value": 2.7, "flag": None},
+        ],
+    }
+    assert "ride_final_drive_ratio" not in ride_summary.scalar_names()

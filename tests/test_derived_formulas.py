@@ -36,6 +36,32 @@ PART2_SIGNALS = [
     "lean_crosscheck_residual",
     "stop_event",
 ]
+D103_SIGNALS = [
+    "clutch_state",
+    "clutch_slip_ratio",
+    "neutral_coasting_state",
+    "engine_braking_phase",
+    "over_rev",
+    "lugging",
+    "cold_engine_abuse",
+    "idle_rpm_std",
+    "idle_rpm_drift",
+    "charging_plateau_voltage",
+    "fuel_level_filtered",
+    "road_roughness",
+    "heat_soak_delta",
+    "idle_map_residual",
+    "wheel_slip",
+    "volumetric_efficiency",
+    "intake_flow_residual",
+    "shift_event",
+    "launch_event",
+    "braking_event",
+    "pitch_event",
+    "refuel_event",
+    "cranking_dip",
+    "battery_rest_voltage",
+]
 FUEL_DENSITY = vehicle_constants.CONSTANTS["fuel_density_kg_per_l"][0]
 TANK_L = vehicle_constants.CONSTANTS["fuel_tank_capacity_l"][0]
 
@@ -70,7 +96,8 @@ def test_every_formula_is_a_class_a_signal_with_resolvable_inputs():
                     assert resolve_sensor(key) is None
                 else:
                     assert resolve_sensor(key) is not None, f"{inp} has no parquet column"
-    assert len(FORMULAS) == 19 + len(PART2_SIGNALS)
+    assert len(FORMULAS) == 19 + len(PART2_SIGNALS) + len(D103_SIGNALS)
+    assert set(D103_SIGNALS) <= set(FORMULAS)
     assert set(PART2_SIGNALS) <= set(FORMULAS)
     assert "did.VEHICLE_SPEED" in names
 
