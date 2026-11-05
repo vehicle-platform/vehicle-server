@@ -14,6 +14,7 @@ import random
 import pytest
 
 from vehicle_server.defs import vehicle_derived
+from vehicle_server.derived import summary
 from vehicle_server.derived.health_windows import (
     CLOSE_CONDITION,
     CLOSE_ENGINE_ZERO,
@@ -21,7 +22,6 @@ from vehicle_server.derived.health_windows import (
     CLOSE_SESSION_END,
     CLOSE_STABLE,
     CLOSE_UNKNOWN,
-    TRANSITION_OPENERS,
     WindowInput,
     WindowResult,
     evaluate_window,
@@ -29,7 +29,6 @@ from vehicle_server.derived.health_windows import (
 )
 
 WINDOWS = vehicle_derived.WINDOWS
-RPM = "did.ENGINE_SPEED"
 CLOSE_REASONS = {
     CLOSE_CONDITION,
     CLOSE_STABLE,
@@ -41,7 +40,7 @@ CLOSE_REASONS = {
 SEEDS = range(200)
 
 
-def _candidates(spec: dict, name: str) -> list[float | None]:
+def _candidates(spec: dict, name: str, trigger: str | None) -> list[float | None]:
     values: list[float | None] = []
     for condition in spec.get("conditions") or ():
         if condition["input"] != name:
@@ -56,7 +55,7 @@ def _candidates(spec: dict, name: str) -> list[float | None]:
         values.append(value * 0.5)
     if any(stable["input"] == name for stable in spec.get("stable") or ()):
         values.extend((40.0, 50.0, 60.0, 70.0))
-    if name == RPM:
+    if name == trigger:
         values.extend((0.0, 1_000.0, 1_200.0, 1_500.0, 1_800.0))
     if name == "derived.gear_estimate":
         values.extend((3.0, 4.0, 5.0, 6.0))
@@ -74,9 +73,11 @@ def _timeline(rng: random.Random) -> int:
     return rng.choice((60_000, 120_000, 180_000))
 
 
-def _input(rng: random.Random, spec: dict, name: str, session_len: int) -> WindowInput:
+def _input(
+    rng: random.Random, spec: dict, name: str, trigger: str | None, session_len: int
+) -> WindowInput:
     stale_after_ms = rng.choice((1_000, 5_000, 20_000, 120_000))
-    choices = _candidates(spec, name)
+    choices = _candidates(spec, name, trigger)
     current = rng.choice(choices)
     times: list[int] = []
     values: list[float | None] = []
@@ -96,10 +97,10 @@ def _input(rng: random.Random, spec: dict, name: str, session_len: int) -> Windo
 
 def _run(key: str, rng: random.Random) -> tuple[WindowResult, dict[str, WindowInput], str | None]:
     spec = WINDOWS[key]
-    trigger = RPM if spec["opens_on"] in TRANSITION_OPENERS else None
+    trigger = summary._window_trigger(spec)  # the production trigger (D-069 item 3)
     names = input_names(spec, trigger)
     session_len = _timeline(rng)
-    inputs = {name: _input(rng, spec, name, session_len) for name in names}
+    inputs = {name: _input(rng, spec, name, trigger, session_len) for name in names}
     return evaluate_window(spec, inputs, trigger), inputs, trigger
 
 
@@ -169,7 +170,7 @@ def test_time_shift_moves_every_instance(key: str):
 @pytest.mark.parametrize("key", list(WINDOWS))
 def test_no_inputs_or_all_stale_never_qualifies(key: str):
     spec = WINDOWS[key]
-    trigger = RPM if spec["opens_on"] in TRANSITION_OPENERS else None
+    trigger = summary._window_trigger(spec)
     names = input_names(spec, trigger)
 
     empty = {name: WindowInput((), (), 120_000) for name in names}
