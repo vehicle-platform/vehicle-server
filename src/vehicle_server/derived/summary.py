@@ -122,19 +122,25 @@ NOT_IMPLEMENTED_REASONS: dict[str, str] = {
     "coast_down_rolling_resistance": _COAST_DOWN_REASON,
 }
 
-# D-079 health-window signals (defs v0.16.0): each reports one window instance (`window` key in
-# the defs), which needs the window state machine; the reference has none yet.
-_WINDOW_REASON = "definition: D-079 window instance (window state machine not implemented)"
+# D-079 health-window signals (defs v0.16.0): the ready ones are computed in
+# health_window_summaries.py; these two need a defs addition first.
 NOT_IMPLEMENTED_REASONS.update(
     {
-        name: _WINDOW_REASON
-        for name, spec in vehicle_derived.SIGNALS.items()
-        if spec["class"] == "B"
-        and spec.get("window")
-        and spec["ready_phase0"]
-        and not spec.get("pending_inputs")
+        "window_cruise_final_drive_residual": (
+            "definition: declared inputs have no const.gear_ratio_<n>, so the measured final "
+            "drive cannot be separated from the gearbox ratio (compare ride_final_drive_ratio)"
+        ),
+        "window_cruise_ve_residual": (
+            "definition: defs has no expected-VE model at that gear and speed"
+        ),
     }
 )
+
+# D-069 item 3: the engine_start / engine_stop windows open on a transition of this DID.
+_ENGINE_SPEED = "ENGINE_SPEED"
+if _ENGINE_SPEED not in vehicle_cl250.DIDS:
+    raise ImportError(f"vehicle_defs has no DID {_ENGINE_SPEED}")
+_TRANSITION_TRIGGER = f"did.{_ENGINE_SPEED}"
 
 
 class MissingInputs(Exception):
@@ -161,6 +167,7 @@ class SummaryEnv(Env):
         self.bins: list[Mapping[str, Any]] = list(spec.get("bins") or [])
         self._outputs = outputs
         self._results = results
+        self._window_key: str | None = spec.get("window")
         self._windows = windows or {}
 
     def _declared(self, name: str) -> str:
@@ -186,9 +193,12 @@ class SummaryEnv(Env):
         """All samples (time order) of a declared did.* / sensor.* input."""
         return list(self.feed(name).values)  # type: ignore[arg-type]
 
-    def window(self, key: str) -> health_windows.WindowResult:
-        """The precomputed D-079 window result (empty when this evaluation has none)."""
-        return self._windows.get(key, health_windows.WindowResult.empty())
+    def window(self) -> health_windows.WindowResult:
+        """The precomputed result of this signal's D-079 window (defs `window` key; empty when
+        this evaluation has none)."""
+        if self._window_key is None:
+            raise KeyError("this signal has no D-079 window")
+        return self._windows.get(self._window_key, health_windows.WindowResult.empty())
 
 
 # --- helpers ------------------------------------------------------------------------------
@@ -524,34 +534,17 @@ def _summarize_one(
     return {"status": COMPUTED, "value": value, "unit": unit, "flag": flag}
 
 
-def _window_trigger(spec: Mapping[str, Any], specs: Mapping[str, Mapping[str, Any]]) -> str | None:
-    """The engine-speed input of a transition window, derived from defs (never a literal)."""
-    if spec["opens_on"] not in ("engine_start", "engine_stop"):
-        return None
-    conditions = [
-        condition["input"]
-        for condition in spec.get("conditions") or ()
-        if condition["input"].startswith("did.")
-    ]
-    unique_conditions = list(dict.fromkeys(conditions))
-    if len(unique_conditions) == 1:
-        return unique_conditions[0]
-    per_signal: list[set[str]] = []
-    for signal_name in spec.get("signals") or ():
-        signal_spec = specs.get(signal_name) or vehicle_derived.SIGNALS.get(signal_name)
-        if signal_spec is not None:
-            per_signal.append({name for name in signal_spec["inputs"] if name.startswith("did.")})
-    common = set.intersection(*per_signal) if per_signal else set()
-    return common.pop() if len(common) == 1 else None
+def _window_trigger(spec: Mapping[str, Any]) -> str | None:
+    """The trigger input of a transition window (D-069 item 3), None for the others."""
+    if spec["opens_on"] in health_windows.TRANSITION_OPENERS:
+        return _TRANSITION_TRIGGER
+    return None
 
 
-def window_input_names(
-    key: str, specs: Mapping[str, Mapping[str, Any]] | None = None
-) -> tuple[str, ...]:
+def window_input_names(key: str) -> tuple[str, ...]:
     """The inputs the state machine needs for one D-079 window (used by the D-095 audit)."""
     spec = vehicle_derived.WINDOWS[key]
-    specs = specs if specs is not None else vehicle_derived.SIGNALS
-    return health_windows.input_names(spec, _window_trigger(spec, specs))
+    return health_windows.input_names(spec, _window_trigger(spec))
 
 
 def _window_input(
@@ -571,6 +564,7 @@ def _window_input(
             return health_windows.WindowInput((), (), stale)
         return health_windows.WindowInput(tuple(output.times), tuple(output.values), stale)
     series = inputs.series(name)
+    # A DID left out of a restricted did_limits (test callers) feeds no samples.
     stale = sensors[key]["stale_after_ms"] if kind == "sensor" else did_limits.get(key)
     if series is None or stale is None:
         return health_windows.WindowInput((), (), stale or 0)
@@ -589,7 +583,7 @@ def _window_results(
     results: dict[str, health_windows.WindowResult] = {}
     for key in sorted(keys):
         spec = vehicle_derived.WINDOWS[key]
-        trigger = _window_trigger(spec, specs)
+        trigger = _window_trigger(spec)
         names = health_windows.input_names(spec, trigger)
         built = {
             name: _window_input(name, inputs, outputs, specs, sensors, did_limits) for name in names
@@ -655,10 +649,5 @@ def evaluate(
 
 
 # The D-103 and D-079 summaries register themselves in SUMMARIES; the module needs the
-# registry above. The window signals that now have a summary leave the not-implemented set;
-# the two cruise residuals keep a specific reason.
+# registry above.
 from vehicle_server.derived import d103_summaries, health_window_summaries  # noqa: E402, F401
-
-for _name in [name for name in NOT_IMPLEMENTED_REASONS if name in SUMMARIES]:
-    del NOT_IMPLEMENTED_REASONS[_name]
-NOT_IMPLEMENTED_REASONS.update(health_window_summaries.NOT_IMPLEMENTED_WINDOW_REASONS)

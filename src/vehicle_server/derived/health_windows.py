@@ -17,7 +17,7 @@ least once, while the engine transition windows re-arm on their next transition.
 from __future__ import annotations
 
 from bisect import bisect_left, bisect_right
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -28,7 +28,7 @@ CLOSE_ENGINE_ZERO = "engine_zero"
 CLOSE_UNKNOWN = "unknown"
 CLOSE_SESSION_END = "session_end"
 
-_TRANSITION_OPENERS = ("engine_start", "engine_stop")
+TRANSITION_OPENERS = ("engine_start", "engine_stop")
 
 
 @dataclass(frozen=True)
@@ -80,6 +80,25 @@ def input_names(spec: Mapping[str, Any], trigger_input: str | None = None) -> tu
     if trigger_input is not None and trigger_input not in names:
         names.append(trigger_input)
     return tuple(names)
+
+
+def _timeline(series: Iterable[WindowInput]) -> list[int]:
+    """The merged sample times plus, inside the session, the first time each sample is stale
+    (sample + stale_after_ms + 1 ms) when no newer sample of that input arrived by then, so an
+    instance closes when an input is lost, not at the next sample of another input."""
+    samples: set[int] = set()
+    expiries: set[int] = set()
+    for sample in series:
+        samples.update(sample.times)
+        following: tuple[int | None, ...] = (*sample.times[1:], None)
+        for t, next_t in zip(sample.times, following, strict=False):
+            expiry = t + sample.stale_after_ms + 1
+            if next_t is None or next_t > expiry:
+                expiries.add(expiry)
+    if not samples:
+        return []
+    end = max(samples)
+    return sorted(samples | {t for t in expiries if t <= end})
 
 
 def _latest(sample: WindowInput, t: int) -> float | None:
@@ -176,15 +195,16 @@ def evaluate_window(
     """Evaluates one WINDOWS entry over its inputs (see the module docstring)."""
     opener = spec["opens_on"]
     names = input_names(spec, trigger_input)
-    if opener in _TRANSITION_OPENERS and trigger_input is None:
+    if opener in TRANSITION_OPENERS and trigger_input is None:
         raise ValueError(f"{opener} window needs a trigger input")
     missing = [name for name in names if name not in inputs]
     if missing:
         raise KeyError(f"missing window inputs: {missing}")
 
-    times = sorted({t for name in names for t in inputs[name].times})
+    times = _timeline(inputs[name] for name in names)
     if not times:
         return WindowResult.empty()
+    max_duration_ms = spec.get("max_duration_ms")
 
     trigger = inputs[trigger_input] if trigger_input is not None else None
     instances: list[WindowInstance] = []
@@ -200,6 +220,8 @@ def evaluate_window(
         nonlocal open_ms, bounds
         if open_ms is None:
             return
+        if reason == CLOSE_MAX_DURATION:
+            t = open_ms + max_duration_ms
         duration = t - open_ms
         qualifies = reason == CLOSE_MAX_DURATION or duration >= spec["min_duration_ms"]
         instances.append(WindowInstance(open_ms, t, reason, qualifies))
@@ -213,7 +235,7 @@ def evaluate_window(
 
     for t in times:
         transitioned = False
-        if opener in _TRANSITION_OPENERS and trigger is not None:
+        if opener in TRANSITION_OPENERS and trigger is not None:
             is_sample, current = _sample_at(trigger, t)
             if is_sample:
                 if current is None:
@@ -232,7 +254,7 @@ def evaluate_window(
 
         was_open = open_ms is not None
         if was_open:
-            if t - open_ms >= spec["max_duration_ms"]:
+            if max_duration_ms is not None and t - open_ms >= max_duration_ms:
                 close(t, CLOSE_MAX_DURATION)
             elif opener in ("condition", "key_on", "engine_stop"):
                 if not _conditions_hold(spec, inputs, t):

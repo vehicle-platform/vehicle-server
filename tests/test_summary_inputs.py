@@ -65,10 +65,12 @@ class RecordingEnv(summary.SummaryEnv):
         self.accessed.add(name)
         return super().const(name)
 
-    def window(self, key: str) -> WindowResult:
-        result = super().window(key)
+    def window(self) -> WindowResult:
+        result = super().window()
         if result.first_qualifying is None:
             instance = WindowInstance(0, 5_000, CLOSE_SESSION_END, True)
+            key = self._window_key
+            assert key is not None
             result = WindowResult((instance,), instance, 1, summary.window_input_names(key))
         self.accessed.update(result.inputs)
         return result
