@@ -181,6 +181,39 @@ def _summary_table(session_id: str, rows: list[summary.SummaryRow]) -> pa.Table:
     )
 
 
+def _health_windows_block(
+    evaluation: summary.SummaryEvaluation, session_dir: Path
+) -> dict[str, Any]:
+    """The D-079 window instances in the same t0 axis as GET /sessions/{id}/series."""
+    from vehicle_server import series
+
+    t0 = series.t0_of(series.load_all(session_dir))
+    windows: dict[str, Any] = {}
+    for key in vehicle_derived.WINDOWS:
+        result = evaluation.windows.get(key)
+        if result is None:
+            continue
+        windows[key] = {
+            "qualifying_count": result.qualifying_count,
+            "instances": [
+                {
+                    "start_ms": instance.open_ms - t0,
+                    "end_ms": instance.close_ms - t0,
+                    "duration_ms": instance.duration_ms,
+                    "close_reason": instance.close_reason,
+                    "qualifies": instance.qualifies,
+                    "first_qualifying": instance == result.first_qualifying,
+                }
+                for instance in result.instances
+            ],
+        }
+    return {
+        "rule": "provisional: Claude's reading of D-079 (vehicle-server README)",
+        "t0_device_ms": t0,
+        "windows": windows,
+    }
+
+
 def summarize_session(
     session_dir: Path,
     session_id: str,
@@ -207,6 +240,7 @@ def summarize_session(
         "ride_definition": RIDE_DEFINITION,
         "summary": statuses,
         "records": records,
+        "health_windows": _health_windows_block(evaluation, session_dir),
     }
     return SummaryResult(_summary_table(session_id, evaluation.rows), coverage)
 

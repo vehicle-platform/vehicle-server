@@ -16,6 +16,7 @@ from vehicle_server.config import Settings
 from vehicle_server.decode import SIGNALS_HEADER, V4_HEADER, vsig_state
 from vehicle_server.defs import vehicle_catalog
 from vehicle_server.ingest import ingest_path
+from vehicle_server.report import render_text
 
 from .make_fixtures import write_csv
 
@@ -135,7 +136,56 @@ def test_health_windows_from_ingest_to_report_api_and_cli(
     result = ingest_path(_write_health_window_session(tmp_path), settings)
     report = json.loads((settings.sessions_dir / SESSION_ID / "report.json").read_text())
 
-    by_record = report["derived_summary"]["records"]
+    summary_block = report["derived_summary"]
+    health_windows = summary_block["health_windows"]
+    assert set(summary_block) == {
+        "defs_version",
+        "ride_definition",
+        "summary",
+        "records",
+        "health_windows",
+    }
+    assert health_windows["t0_device_ms"] == 0
+    assert list(health_windows["windows"]) == [
+        "W1_KEY_ON",
+        "W2_CRANK",
+        "W3_WARM_IDLE",
+        "W4_CRUISE",
+        "W5_POST_STOP",
+    ]
+    assert health_windows["windows"]["W1_KEY_ON"]["instances"] == [
+        {
+            "start_ms": 0,
+            "end_ms": 3_000,
+            "duration_ms": 3_000,
+            "close_reason": "condition",
+            "qualifies": True,
+            "first_qualifying": True,
+        }
+    ]
+    assert health_windows["windows"]["W3_WARM_IDLE"]["instances"] == [
+        {
+            "start_ms": 3_000,
+            "end_ms": 30_000,
+            "duration_ms": 27_000,
+            "close_reason": "condition",
+            "qualifies": True,
+            "first_qualifying": True,
+        }
+    ]
+    assert health_windows["windows"]["W5_POST_STOP"]["instances"] == [
+        {
+            "start_ms": 30_000,
+            "end_ms": 91_000,
+            "duration_ms": 61_000,
+            "close_reason": "session_end",
+            "qualifies": True,
+            "first_qualifying": True,
+        }
+    ]
+    assert health_windows["windows"]["W4_CRUISE"]["instances"] == []
+
+    by_record = summary_block["records"]
     key_on = by_record["RIDE_WINDOW_KEY_ON"]["signals"]
     warm_idle = by_record["RIDE_WINDOW_WARM_IDLE"]["signals"]
     post_stop = by_record["RIDE_WINDOW_POST_STOP"]["signals"]
@@ -156,6 +206,8 @@ def test_health_windows_from_ingest_to_report_api_and_cli(
     client = TestClient(create_app(settings))
     summary = client.get(f"/sessions/{SESSION_ID}/summary", headers=AUTH)
     assert summary.status_code == 200
+    series_t0 = client.get(f"/sessions/{SESSION_ID}/series", headers=AUTH).json()["t0_device_ms"]
+    assert health_windows["t0_device_ms"] == series_t0
     api_signals = {entry["name"]: entry for entry in summary.json()["signals"]}
     assert api_signals["window_key_on_rest_voltage"]["value"] == pytest.approx(12.6)
     assert api_signals["window_warm_idle_rpm_drift"]["value"] == pytest.approx(100.0)
@@ -182,3 +234,11 @@ def test_health_windows_from_ingest_to_report_api_and_cli(
         ]["value"]
         == 1.0
     )
+    assert rerun["derived_summary"]["health_windows"] == health_windows
+
+    text = render_text(report)
+    assert "ride summaries: one session = one ride" in text
+    assert "W1_KEY_ON: 1 instance, 1 qualifying (first 0.0-3.0 s)" in text
+    assert "W3_WARM_IDLE: 1 instance, 1 qualifying (first 3.0-30.0 s)" in text
+    assert "W4_CRUISE: 0 instances, 0 qualifying (first no qualifying)" in text
+    assert "W5_POST_STOP: 1 instance, 1 qualifying (first 30.0-91.0 s)" in text
