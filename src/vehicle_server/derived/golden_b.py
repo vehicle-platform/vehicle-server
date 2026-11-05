@@ -57,6 +57,7 @@ SKIP_PER_GEAR = "per gear (multi-element, 2a is scalar-only)"
 SKIP_SENSOR = "sensor input (vectors carry DIDs only)"
 SKIP_NO_SUMMARY = "no summary in the reference"
 SKIP_NOT_READY = "not ready_rt_core / ready_phase0 / pending inputs"
+SKIP_HEALTH_WINDOW = "D-079 health window (excluded until rt-core implements the windows)"
 
 # Gap between two rides of the two-ride scenario (no inputs at all), ms.
 TWO_RIDES_GAP_MS = 8_000
@@ -117,7 +118,9 @@ def classify() -> tuple[dict[str, Mapping[str, Any]], dict[str, str]]:
         if spec["class"] != "B":
             continue
         inputs = spec["inputs"]
-        if name not in summary.SUMMARIES:
+        if spec.get("window"):
+            skipped[name] = SKIP_HEALTH_WINDOW
+        elif name not in summary.SUMMARIES:
             skipped[name] = SKIP_NO_SUMMARY
         elif (
             not spec.get("ready_rt_core", False)

@@ -371,7 +371,7 @@ samples but never beyond the input's freshness (`did.*` of a class-B signal: the
 D-087; sensors: `SENSORS` `stale_after_ms`), so a gap adds nothing. A value outside the defs
 `range` is null with `out_of_range` (each cell too); statuses are the class-A ones.
 
-- Implemented (19 of the 46 class-B signals): `ride_distance`, `ride_time`, `ride_idle_time`
+- Implemented (57 of the 75 class-B signals): `ride_distance`, `ride_time`, `ride_idle_time`
   (last valid `trip_distance` / `trip_time` / `idle_time`), `ride_stop_count` (valid
   `stop_event` rows), `ride_fuel_used` (integral of the fuel rate, L), `ride_fuel_consumption`
   (`ride_fuel_used / ride_distance * 100`; distance <= 0 is `standstill`), `ride_ltft_mean`,
@@ -410,8 +410,40 @@ D-087; sensors: `SENSORS` `stale_after_ms`), so a gap adds nothing. A value outs
   the constants file, as for class A.
 - `not_implemented` with a `reason`: `ride_tester_nrc78_count` (needs a per-rttDid sensor),
   `coast_down_cda` and `coast_down_rolling_resistance` (no coast-down speed band), and the
-  D-079 window signals. `ready_phase0: false` / `pending_inputs`
+  two D-079 cruise residuals `window_cruise_final_drive_residual` and
+  `window_cruise_ve_residual` (see above). `ready_phase0: false` / `pending_inputs`
   signals are `not_ready`; absent inputs are `missing_inputs` (with the list).
+
+#### D-079 health windows (provisional)
+
+The reference (`health_windows.py`, `health_window_summaries.py`) is **provisional (Claude's
+reading of D-079, LR17)**. One session is one ride. A window is evaluated on the
+merged sample times of its `condition` / `stable` inputs; an input counts only while its latest
+sample is within its own `stale_after_ms`, and an unknown input makes a condition **not met**
+(nothing is held). A `condition` instance opens when all conditions hold and closes on the
+first failing condition, a `stable` spread above its `max_spread`, or `max_duration_ms`;
+`key_on` opens at the first session sample only if its conditions hold, at most once;
+`engine_start` needs a valid 0 -> valid > 0 transition on consecutive `ENGINE_SPEED` samples;
+`engine_stop` needs a valid > 0 -> valid 0 transition, then holds like `condition`. An
+instance qualifies when its duration is at least `min_duration_ms` (a `max_duration_ms` close
+also qualifies); condition windows re-arm only after their conditions were not met at least
+once. Values use the valid samples inside the first qualifying instance, and
+`<window>_count` is the number of qualifying instances (0 when none). No held value and no
+GPS input is used. Computed (17): W1 `window_key_on_rest_voltage`,
+`window_key_on_sensor_spread`, `window_key_on_map_baro_delta`,
+`window_key_on_warm_restart`, `window_key_on_count`; W2 `window_crank_count`; W3
+`window_warm_idle_rpm_spread`, `window_warm_idle_rpm_drift`,
+`window_warm_idle_map_spread`, `window_warm_idle_stft_mean`,
+`window_warm_idle_stft_std`, `window_warm_idle_count`; W4 `window_cruise_count`; W5
+`window_post_stop_coolant_start`, `window_post_stop_coolant_end`,
+`window_post_stop_coolant_tau`, `window_post_stop_count`. Not computed: fuel-pump current /
+prime time, crank voltage / current / resistance / duration and W3/W4 vibration (their
+inputs are not recorded yet), plus the two W4 cruise residuals above (`not_implemented` with
+a defs-specific reason). A window signal with no qualifying instance is null with
+`no_window`, no valid sample in its instance is `no_data`, and the STFT / tau fits with too
+few points are `insufficient_samples`. Golden B excludes every signal with `window:`
+(`SKIP_HEALTH_WINDOW`) until rt-core implements the windows, so the golden manifest is
+unchanged. If D-079 or the defs description differs from this reading, they win.
 
 `parquet/derived_summary.parquet` is long format, one row per scalar or per cell: `session_id`,
 `record` (e.g. `RIDE_USAGE`), `did` (int64, from `RIDE_SUMMARY_RECORDS`), `signal`, `cell`
