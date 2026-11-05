@@ -8,10 +8,7 @@ import pytest
 
 from vehicle_server.defs import vehicle_derived
 from vehicle_server.derived import engine, summary
-from vehicle_server.derived.health_window_summaries import (
-    FLAG_NO_WINDOW,
-    NOT_IMPLEMENTED_WINDOW_REASONS,
-)
+from vehicle_server.derived.health_window_summaries import FLAG_NO_WINDOW
 
 from .derived_helpers import FakeInputs, const_series, patch_const
 
@@ -120,8 +117,8 @@ def test_no_qualifying_window_reports_no_window():
 def test_out_of_range_value_is_null_not_clamped():
     result = _run(
         {
-            "did.BATTERY_VOLTAGE": const_series(0, 2_000, 1_000, 20.0),
-            "did.ENGINE_SPEED": const_series(0, 2_000, 1_000, 0.0),
+            "did.BATTERY_VOLTAGE": const_series(0, 2_000, 100, 20.0),
+            "did.ENGINE_SPEED": const_series(0, 2_000, 100, 0.0),
         }
     )
 
@@ -145,6 +142,7 @@ def test_every_ready_window_signal_is_computed_or_has_a_specific_reason():
     for name in computed:
         assert name not in summary.NOT_IMPLEMENTED_REASONS
 
+    not_computed: set[str] = set()
     for name, spec in SPECS.items():
         if (
             spec.get("window")
@@ -152,10 +150,10 @@ def test_every_ready_window_signal_is_computed_or_has_a_specific_reason():
             and not spec.get("pending_inputs")
             and name not in computed
         ):
-            reason = summary.NOT_IMPLEMENTED_REASONS.get(name)
-            assert reason and reason != summary._WINDOW_REASON, name
+            assert summary.NOT_IMPLEMENTED_REASONS[name].startswith("definition:"), name
+            not_computed.add(name)
 
-    assert set(NOT_IMPLEMENTED_WINDOW_REASONS) == {
+    assert not_computed == {
         "window_cruise_final_drive_residual",
         "window_cruise_ve_residual",
     }

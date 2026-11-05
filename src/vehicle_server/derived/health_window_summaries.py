@@ -33,19 +33,11 @@ _STFT = "did.SHORT_TERM_FUEL_TRIM_B1"
 
 _COLD_SOAK = "const.window_cold_soak_max_delta_degc"
 
-NOT_IMPLEMENTED_WINDOW_REASONS = {
-    "window_cruise_final_drive_residual": (
-        "definition: declared inputs have no const.gear_ratio_<n>, so the measured final drive "
-        "cannot be separated from the gearbox ratio (compare ride_final_drive_ratio)"
-    ),
-    "window_cruise_ve_residual": (
-        "definition: defs has no expected-VE model at that gear and speed"
-    ),
-}
+_MS_PER_S = 1000.0
 
 
-def _instance(env: SummaryEnv, window: str) -> WindowInstance:
-    instance = env.window(window).first_qualifying
+def _instance(env: SummaryEnv) -> WindowInstance:
+    instance = env.window().first_qualifying
     if instance is None:
         raise InputInvalid(FLAG_NO_WINDOW)
     return instance
@@ -83,14 +75,14 @@ def _mean(values: list[float]) -> float:
 @_summary("window_key_on_rest_voltage")
 def window_key_on_rest_voltage(env: SummaryEnv) -> Outcome:
     """Mean battery voltage in the first qualifying key-on window, V."""
-    instance = _instance(env, "W1_KEY_ON")
+    instance = _instance(env)
     return _mean([v for _, v in _points(env, _BATTERY, instance)]), None
 
 
 @_summary("window_key_on_sensor_spread")
 def window_key_on_sensor_spread(env: SummaryEnv) -> Outcome:
     """Largest minus smallest mean of coolant, intake-air and ambient temperature, degC."""
-    instance = _instance(env, "W1_KEY_ON")
+    instance = _instance(env)
     means = [
         _mean([v for _, v in _points(env, name, instance)])
         for name in (_COOLANT, _INTAKE, _AMBIENT)
@@ -101,7 +93,7 @@ def window_key_on_sensor_spread(env: SummaryEnv) -> Outcome:
 @_summary("window_key_on_map_baro_delta")
 def window_key_on_map_baro_delta(env: SummaryEnv) -> Outcome:
     """Mean intake MAP minus mean barometric pressure in the key-on window, kPa."""
-    instance = _instance(env, "W1_KEY_ON")
+    instance = _instance(env)
     map_mean = _mean([v for _, v in _points(env, _MAP, instance)])
     baro_mean = _mean([v for _, v in _points(env, _BARO, instance)])
     return map_mean - baro_mean, None
@@ -110,7 +102,7 @@ def window_key_on_map_baro_delta(env: SummaryEnv) -> Outcome:
 @_summary("window_key_on_warm_restart")
 def window_key_on_warm_restart(env: SummaryEnv) -> Outcome:
     """1 when the key-on coolant differs from ambient by more than the defs cold-soak delta."""
-    instance = _instance(env, "W1_KEY_ON")
+    instance = _instance(env)
     coolant = _mean([v for _, v in _points(env, _COOLANT, instance)])
     ambient = _mean([v for _, v in _points(env, _AMBIENT, instance)])
     return (1.0 if abs(coolant - ambient) > env.const(_COLD_SOAK) else 0.0), None
@@ -119,7 +111,7 @@ def window_key_on_warm_restart(env: SummaryEnv) -> Outcome:
 @_summary("window_key_on_count")
 def window_key_on_count(env: SummaryEnv) -> Outcome:
     """Number of qualifying key-on windows in the ride (0 when none)."""
-    return float(env.window("W1_KEY_ON").qualifying_count), None
+    return float(env.window().qualifying_count), None
 
 
 # --- W2: crank ---------------------------------------------------------------------------------
@@ -128,7 +120,7 @@ def window_key_on_count(env: SummaryEnv) -> Outcome:
 @_summary("window_crank_count")
 def window_crank_count(env: SummaryEnv) -> Outcome:
     """Number of qualifying crank windows in the ride (0 when none)."""
-    return float(env.window("W2_CRANK").qualifying_count), None
+    return float(env.window().qualifying_count), None
 
 
 # --- W3: warm idle -----------------------------------------------------------------------------
@@ -137,7 +129,7 @@ def window_crank_count(env: SummaryEnv) -> Outcome:
 @_summary("window_warm_idle_rpm_spread")
 def window_warm_idle_rpm_spread(env: SummaryEnv) -> Outcome:
     """Largest minus smallest engine speed in the first qualifying warm-idle window, rpm."""
-    instance = _instance(env, "W3_WARM_IDLE")
+    instance = _instance(env)
     values = [v for _, v in _points(env, _RPM, instance)]
     if not values:
         raise InputInvalid(FLAG_NO_DATA)
@@ -147,7 +139,7 @@ def window_warm_idle_rpm_spread(env: SummaryEnv) -> Outcome:
 @_summary("window_warm_idle_rpm_drift")
 def window_warm_idle_rpm_drift(env: SummaryEnv) -> Outcome:
     """Mean engine speed of the second half of the instance minus the first half, rpm."""
-    instance = _instance(env, "W3_WARM_IDLE")
+    instance = _instance(env)
     middle = instance.open_ms + (instance.close_ms - instance.open_ms) / 2.0
     points = _points(env, _RPM, instance)
     first = _mean([v for t, v in points if t < middle])
@@ -158,7 +150,7 @@ def window_warm_idle_rpm_drift(env: SummaryEnv) -> Outcome:
 @_summary("window_warm_idle_map_spread")
 def window_warm_idle_map_spread(env: SummaryEnv) -> Outcome:
     """Largest minus smallest intake MAP in the first qualifying warm-idle window, kPa."""
-    instance = _instance(env, "W3_WARM_IDLE")
+    instance = _instance(env)
     values = [v for _, v in _points(env, _MAP, instance)]
     if not values:
         raise InputInvalid(FLAG_NO_DATA)
@@ -168,14 +160,14 @@ def window_warm_idle_map_spread(env: SummaryEnv) -> Outcome:
 @_summary("window_warm_idle_stft_mean")
 def window_warm_idle_stft_mean(env: SummaryEnv) -> Outcome:
     """Mean short-term fuel trim in the first qualifying warm-idle window, %."""
-    instance = _instance(env, "W3_WARM_IDLE")
+    instance = _instance(env)
     return _mean([v for _, v in _points(env, _STFT, instance)]), None
 
 
 @_summary("window_warm_idle_stft_std")
 def window_warm_idle_stft_std(env: SummaryEnv) -> Outcome:
     """Sample standard deviation (n - 1) of the short-term fuel trim in the window, %."""
-    instance = _instance(env, "W3_WARM_IDLE")
+    instance = _instance(env)
     values = [v for _, v in _points(env, _STFT, instance)]
     if len(values) < 2:
         raise InputInvalid(FLAG_INSUFFICIENT_SAMPLES)
@@ -186,7 +178,7 @@ def window_warm_idle_stft_std(env: SummaryEnv) -> Outcome:
 @_summary("window_warm_idle_count")
 def window_warm_idle_count(env: SummaryEnv) -> Outcome:
     """Number of qualifying warm-idle windows in the ride (0 when none)."""
-    return float(env.window("W3_WARM_IDLE").qualifying_count), None
+    return float(env.window().qualifying_count), None
 
 
 # --- W4: cruise --------------------------------------------------------------------------------
@@ -195,7 +187,7 @@ def window_warm_idle_count(env: SummaryEnv) -> Outcome:
 @_summary("window_cruise_count")
 def window_cruise_count(env: SummaryEnv) -> Outcome:
     """Number of qualifying cruise windows in the ride (0 when none)."""
-    return float(env.window("W4_CRUISE").qualifying_count), None
+    return float(env.window().qualifying_count), None
 
 
 # --- W5: post stop -----------------------------------------------------------------------------
@@ -204,7 +196,7 @@ def window_cruise_count(env: SummaryEnv) -> Outcome:
 @_summary("window_post_stop_coolant_start")
 def window_post_stop_coolant_start(env: SummaryEnv) -> Outcome:
     """First valid coolant temperature in the first qualifying post-stop window, degC."""
-    instance = _instance(env, "W5_POST_STOP")
+    instance = _instance(env)
     points = _points(env, _COOLANT, instance)
     if not points:
         raise InputInvalid(FLAG_NO_DATA)
@@ -214,7 +206,7 @@ def window_post_stop_coolant_start(env: SummaryEnv) -> Outcome:
 @_summary("window_post_stop_coolant_end")
 def window_post_stop_coolant_end(env: SummaryEnv) -> Outcome:
     """Last valid coolant temperature in the first qualifying post-stop window, degC."""
-    instance = _instance(env, "W5_POST_STOP")
+    instance = _instance(env)
     points = _points(env, _COOLANT, instance)
     if not points:
         raise InputInvalid(FLAG_NO_DATA)
@@ -228,11 +220,11 @@ def window_post_stop_coolant_tau(env: SummaryEnv) -> Outcome:
     Least-squares slope of ln(T - T_amb) over the elapsed seconds, tau = -1 / slope; fewer than
     three positive differences, a degenerate time axis or a slope >= 0 is invalid.
     """
-    instance = _instance(env, "W5_POST_STOP")
+    instance = _instance(env)
     coolant = _points(env, _COOLANT, instance)
     ambient = _mean([v for _, v in _points(env, _AMBIENT, instance)])
     fit = [
-        ((t - instance.open_ms) / 1000.0, math.log(v - ambient))
+        ((t - instance.open_ms) / _MS_PER_S, math.log(v - ambient))
         for t, v in coolant
         if v - ambient > 0.0
     ]
@@ -252,4 +244,4 @@ def window_post_stop_coolant_tau(env: SummaryEnv) -> Outcome:
 @_summary("window_post_stop_count")
 def window_post_stop_count(env: SummaryEnv) -> Outcome:
     """Number of qualifying post-stop windows in the ride (0 when none)."""
-    return float(env.window("W5_POST_STOP").qualifying_count), None
+    return float(env.window().qualifying_count), None

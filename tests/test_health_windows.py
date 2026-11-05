@@ -119,9 +119,30 @@ def test_stale_condition_input_is_not_met():
         },
     )
 
+    # Closed when the coolant sample goes stale (0 + 200 + 1 ms), not at the next sample.
     assert len(result.instances) == 1
     assert result.instances[0].close_reason == CLOSE_CONDITION
-    assert result.instances[0].close_ms == 300
+    assert result.instances[0].close_ms == 201
+
+
+def test_lost_input_does_not_count_as_window_duration():
+    # Engine speed sampled every 1 s with a shorter stale limit: each sample is valid for only
+    # stale_after_ms, so the key-on window never lasts its min duration.
+    rpm = _input([0, 1_000, 2_000, 3_000], [0.0] * 4, stale_after_ms=300)
+    result = _run("W1_KEY_ON", {RPM: rpm})
+
+    assert result.instances[0].close_reason == CLOSE_CONDITION
+    assert result.instances[0].close_ms == 301
+    assert result.qualifying_count == 0
+
+
+def test_max_duration_close_is_clamped_between_samples():
+    max_ms = WINDOWS["W1_KEY_ON"]["max_duration_ms"]
+    times = [0, max_ms // 2, max_ms + 700]
+    result = _run("W1_KEY_ON", {RPM: _input(times, [0.0] * 3)})
+
+    assert result.instances[0].close_reason == CLOSE_MAX_DURATION
+    assert result.instances[0].close_ms == max_ms
 
 
 def test_engine_start_needs_two_consecutive_valid_samples():

@@ -418,10 +418,12 @@ D-087; sensors: `SENSORS` `stale_after_ms`), so a gap adds nothing. A value outs
 
 The reference (`health_windows.py`, `health_window_summaries.py`) is **provisional (Claude's
 reading of D-079, LR17)**. One session is one ride. A window is evaluated on the
-merged sample times of its `condition` / `stable` inputs; an input counts only while its latest
-sample is within its own `stale_after_ms`, and an unknown input makes a condition **not met**
-(nothing is held). A `condition` instance opens when all conditions hold and closes on the
-first failing condition, a `stable` spread above its `max_spread`, or `max_duration_ms`;
+merged sample times of its `condition` / `stable` inputs, plus the instant each sample goes
+stale; an input counts only while its latest sample is within its own `stale_after_ms`, and an
+unknown input makes a condition **not met** (nothing is held), so a lost input closes the
+instance at that instant and the gap never counts as window time. A `condition` instance opens
+when all conditions hold and closes on the first failing condition, a `stable` spread above its
+`max_spread`, or `max_duration_ms` (closed at open + `max_duration_ms`);
 `key_on` opens at the first session sample only if its conditions hold, at most once;
 `engine_start` needs a valid 0 -> valid > 0 transition on consecutive `ENGINE_SPEED` samples;
 `engine_stop` needs a valid > 0 -> valid 0 transition, then holds like `condition`. An
