@@ -797,17 +797,18 @@ def render_text(report: dict[str, Any]) -> str:
     elif ride:
         counts = ", ".join(f"{n} {status}" for status, n in sorted(ride["summary"].items()))
         lines.append(f"  ride summaries: one {ride['ride_definition']} = one ride ({counts})")
-        for key, item in (ride.get("health_windows") or {}).get("windows", {}).items():
+        windows_block = ride.get("health_windows") or {}
+        if "error" in windows_block:
+            lines.append(f"  health windows: error: {windows_block['error']}")
+        for key, item in windows_block.get("windows", {}).items():
             count = len(item["instances"])
             first = next((i for i in item["instances"] if i["first_qualifying"]), None)
             span = (
-                f"{first['start_ms'] / 1000:.1f}-{first['end_ms'] / 1000:.1f} s"
+                f" (first {first['start_ms'] / 1000:.1f}-{first['end_ms'] / 1000:.1f} s)"
                 if first is not None
-                else "no qualifying"
+                else ""
             )
             plural = "instance" if count == 1 else "instances"
-            lines.append(
-                f"  {key}: {count} {plural}, {item['qualifying_count']} qualifying (first {span})"
-            )
+            lines.append(f"  {key}: {count} {plural}, {item['qualifying_count']} qualifying{span}")
 
     return "\n".join(lines) + "\n"

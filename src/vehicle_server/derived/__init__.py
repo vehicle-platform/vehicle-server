@@ -184,7 +184,17 @@ def _summary_table(session_id: str, rows: list[summary.SummaryRow]) -> pa.Table:
 def _health_windows_block(
     evaluation: summary.SummaryEvaluation, session_dir: Path
 ) -> dict[str, Any]:
-    """The D-079 window instances in the same t0 axis as GET /sessions/{id}/series."""
+    """The D-079 window instances on the same t0 axis as GET /sessions/{id}/series. A failure
+    here becomes {"error": ...} in this key only, so it never costs the class-B scalars."""
+    try:
+        return _health_windows_instances(evaluation, session_dir)
+    except Exception as exc:
+        return {"error": f"{type(exc).__name__}: {exc}"}
+
+
+def _health_windows_instances(
+    evaluation: summary.SummaryEvaluation, session_dir: Path
+) -> dict[str, Any]:
     from vehicle_server import series
 
     t0 = series.t0_of(series.load_all(session_dir))

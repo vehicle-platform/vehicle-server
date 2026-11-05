@@ -240,5 +240,47 @@ def test_health_windows_from_ingest_to_report_api_and_cli(
     assert "ride summaries: one session = one ride" in text
     assert "W1_KEY_ON: 1 instance, 1 qualifying (first 0.0-3.0 s)" in text
     assert "W3_WARM_IDLE: 1 instance, 1 qualifying (first 3.0-30.0 s)" in text
-    assert "W4_CRUISE: 0 instances, 0 qualifying (first no qualifying)" in text
+    assert "W4_CRUISE: 0 instances, 0 qualifying\n" in text + "\n"
     assert "W5_POST_STOP: 1 instance, 1 qualifying (first 30.0-91.0 s)" in text
+
+
+def _evaluation_with_w3(open_ms: int, close_ms: int):
+    from vehicle_server.derived import summary
+    from vehicle_server.derived.health_windows import WindowInstance, WindowResult
+
+    instance = WindowInstance(open_ms, close_ms, "condition", True)
+    return summary.SummaryEvaluation(
+        windows={"W3_WARM_IDLE": WindowResult((instance,), instance, 1)}
+    )
+
+
+def test_health_windows_block_subtracts_the_series_t0(monkeypatch, tmp_path: Path):
+    from vehicle_server import derived, series
+
+    monkeypatch.setattr(series, "load_all", lambda _session_dir: {})
+    monkeypatch.setattr(series, "t0_of", lambda _all: 1_000_000)
+    block = derived._health_windows_block(_evaluation_with_w3(1_003_000, 1_030_000), tmp_path)
+
+    assert block["t0_device_ms"] == 1_000_000
+    assert block["windows"]["W3_WARM_IDLE"]["instances"] == [
+        {
+            "start_ms": 3_000,
+            "end_ms": 30_000,
+            "duration_ms": 27_000,
+            "close_reason": "condition",
+            "qualifies": True,
+            "first_qualifying": True,
+        }
+    ]
+
+
+def test_health_windows_failure_stays_in_its_own_key(monkeypatch, tmp_path: Path):
+    from vehicle_server import derived, series
+
+    def broken(_session_dir):
+        raise OSError("derived.parquet unreadable")
+
+    monkeypatch.setattr(series, "load_all", broken)
+    block = derived._health_windows_block(_evaluation_with_w3(0, 1), tmp_path)
+
+    assert block == {"error": "OSError: derived.parquet unreadable"}
