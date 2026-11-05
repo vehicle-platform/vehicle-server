@@ -44,6 +44,15 @@ def test_selection_and_skips_are_complete(class_b):
         assert not any(i.startswith("sensor.") or "gps" in i.lower() for i in spec["inputs"])
 
 
+def test_health_window_signals_are_never_selected(class_b):
+    from vehicle_server.defs import vehicle_derived
+
+    for name, spec in vehicle_derived.SIGNALS.items():
+        if spec.get("window"):
+            assert name not in class_b.selected
+            assert class_b.skipped[name] == golden_b.SKIP_HEALTH_WINDOW
+
+
 def test_no_gps_in_class_b_files(class_b):
     for f in class_b.files:
         code = re.sub(r"/\*.*?\*/", "", f.text, flags=re.S)

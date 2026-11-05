@@ -7,6 +7,11 @@ import pytest
 from vehicle_server.defs import vehicle_derived
 from vehicle_server.derived import engine, summary
 from vehicle_server.derived.context import Feed, InputInvalid
+from vehicle_server.derived.health_windows import (
+    CLOSE_SESSION_END,
+    WindowInstance,
+    WindowResult,
+)
 from vehicle_server.gps_fix import usable_fix_values
 
 SPECS = vehicle_derived.SIGNALS
@@ -59,6 +64,14 @@ class RecordingEnv(summary.SummaryEnv):
     def const(self, name: str) -> float:
         self.accessed.add(name)
         return super().const(name)
+
+    def window(self, key: str) -> WindowResult:
+        result = super().window(key)
+        if result.first_qualifying is None:
+            instance = WindowInstance(0, 5_000, CLOSE_SESSION_END, True)
+            result = WindowResult((instance,), instance, 1, summary.window_input_names(key))
+        self.accessed.update(result.inputs)
+        return result
 
 
 def _env(name: str) -> RecordingEnv:

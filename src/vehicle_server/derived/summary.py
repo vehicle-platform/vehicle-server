@@ -28,6 +28,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from vehicle_server.defs import vehicle_cl250, vehicle_derived
+from vehicle_server.derived import health_windows
 from vehicle_server.derived.context import (
     FLAG_INSUFFICIENT_SAMPLES,
     FLAG_INVALID_INPUT,
@@ -154,11 +155,13 @@ class SummaryEnv(Env):
         feeds: dict[str, Feed],
         outputs: Mapping[str, SignalOutput],
         results: Mapping[str, float | None],
+        windows: Mapping[str, health_windows.WindowResult] | None = None,
     ):
         super().__init__(list(spec["inputs"]), feeds, spec.get("window_ms"))
         self.bins: list[Mapping[str, Any]] = list(spec.get("bins") or [])
         self._outputs = outputs
         self._results = results
+        self._windows = windows or {}
 
     def _declared(self, name: str) -> str:
         if name not in self.inputs:
@@ -182,6 +185,10 @@ class SummaryEnv(Env):
     def samples(self, name: str) -> list[float]:
         """All samples (time order) of a declared did.* / sensor.* input."""
         return list(self.feed(name).values)  # type: ignore[arg-type]
+
+    def window(self, key: str) -> health_windows.WindowResult:
+        """The precomputed D-079 window result (empty when this evaluation has none)."""
+        return self._windows.get(key, health_windows.WindowResult.empty())
 
 
 # --- helpers ------------------------------------------------------------------------------
@@ -517,6 +524,80 @@ def _summarize_one(
     return {"status": COMPUTED, "value": value, "unit": unit, "flag": flag}
 
 
+def _window_trigger(spec: Mapping[str, Any], specs: Mapping[str, Mapping[str, Any]]) -> str | None:
+    """The engine-speed input of a transition window, derived from defs (never a literal)."""
+    if spec["opens_on"] not in ("engine_start", "engine_stop"):
+        return None
+    conditions = [
+        condition["input"]
+        for condition in spec.get("conditions") or ()
+        if condition["input"].startswith("did.")
+    ]
+    unique_conditions = list(dict.fromkeys(conditions))
+    if len(unique_conditions) == 1:
+        return unique_conditions[0]
+    per_signal: list[set[str]] = []
+    for signal_name in spec.get("signals") or ():
+        signal_spec = specs.get(signal_name) or vehicle_derived.SIGNALS.get(signal_name)
+        if signal_spec is not None:
+            per_signal.append({name for name in signal_spec["inputs"] if name.startswith("did.")})
+    common = set.intersection(*per_signal) if per_signal else set()
+    return common.pop() if len(common) == 1 else None
+
+
+def window_input_names(
+    key: str, specs: Mapping[str, Mapping[str, Any]] | None = None
+) -> tuple[str, ...]:
+    """The inputs the state machine needs for one D-079 window (used by the D-095 audit)."""
+    spec = vehicle_derived.WINDOWS[key]
+    specs = specs if specs is not None else vehicle_derived.SIGNALS
+    return health_windows.input_names(spec, _window_trigger(spec, specs))
+
+
+def _window_input(
+    name: str,
+    inputs: InputSource,
+    outputs: Mapping[str, SignalOutput],
+    specs: Mapping[str, Mapping[str, Any]],
+    sensors: Mapping[str, Mapping[str, Any]],
+    did_limits: Mapping[str, int],
+) -> health_windows.WindowInput:
+    kind, _, key = name.partition(".")
+    if kind == "derived":
+        spec = specs[key]
+        stale = spec["stale_after_ms"]
+        output = outputs.get(key) if spec["class"] == "A" else None
+        if output is None:
+            return health_windows.WindowInput((), (), stale)
+        return health_windows.WindowInput(tuple(output.times), tuple(output.values), stale)
+    series = inputs.series(name)
+    stale = sensors[key]["stale_after_ms"] if kind == "sensor" else did_limits.get(key)
+    if series is None or stale is None:
+        return health_windows.WindowInput((), (), stale or 0)
+    return health_windows.WindowInput(tuple(series.times), tuple(series.values), stale)
+
+
+def _window_results(
+    keys: set[str],
+    inputs: InputSource,
+    outputs: Mapping[str, SignalOutput],
+    specs: Mapping[str, Mapping[str, Any]],
+    sensors: Mapping[str, Mapping[str, Any]],
+    did_limits: Mapping[str, int],
+) -> dict[str, health_windows.WindowResult]:
+    """Evaluates the requested D-079 windows once, before any class-B summary runs."""
+    results: dict[str, health_windows.WindowResult] = {}
+    for key in sorted(keys):
+        spec = vehicle_derived.WINDOWS[key]
+        trigger = _window_trigger(spec, specs)
+        names = health_windows.input_names(spec, trigger)
+        built = {
+            name: _window_input(name, inputs, outputs, specs, sensors, did_limits) for name in names
+        }
+        results[key] = health_windows.evaluate_window(spec, built, trigger)
+    return results
+
+
 def evaluate(
     inputs: InputSource,
     evaluation: Evaluation,
@@ -534,6 +615,12 @@ def evaluate(
 
     outputs = {o.name: o for o in evaluation.outputs}
     results: dict[str, float | None] = {}  # computed class-B scalars
+    window_keys = {
+        spec["window"]
+        for name, spec in specs.items()
+        if spec["class"] == "B" and spec.get("window") and name in summaries
+    }
+    windows = _window_results(window_keys, inputs, outputs, specs, sensors, did_limits)
     result = SummaryEvaluation()
     entries: dict[str, dict[str, Any]] = {}
     for name in dependency_order(specs):
@@ -555,7 +642,7 @@ def evaluate(
                 if missing:
                     entries[name] = {"status": MISSING_INPUTS, "missing": missing}
                 else:
-                    env = SummaryEnv(spec, feeds, outputs, results)
+                    env = SummaryEnv(spec, feeds, outputs, results, windows)
                     entries[name] = _summarize_one(
                         name, spec, summaries[name], env, result, results
                     )
@@ -567,5 +654,11 @@ def evaluate(
     return result
 
 
-# The D-103 summaries register themselves in SUMMARIES; the module needs the registry above.
-from vehicle_server.derived import d103_summaries  # noqa: E402, F401
+# The D-103 and D-079 summaries register themselves in SUMMARIES; the module needs the
+# registry above. The window signals that now have a summary leave the not-implemented set;
+# the two cruise residuals keep a specific reason.
+from vehicle_server.derived import d103_summaries, health_window_summaries  # noqa: E402, F401
+
+for _name in [name for name in NOT_IMPLEMENTED_REASONS if name in SUMMARIES]:
+    del NOT_IMPLEMENTED_REASONS[_name]
+NOT_IMPLEMENTED_REASONS.update(health_window_summaries.NOT_IMPLEMENTED_WINDOW_REASONS)
