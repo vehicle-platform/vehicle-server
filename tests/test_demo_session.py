@@ -5,12 +5,16 @@ from __future__ import annotations
 import csv
 from pathlib import Path
 
-from scripts.make_demo_session import build
+import pyarrow.parquet as pq
+
 from vehicle_server.config import Settings
 from vehicle_server.defs import vehicle_derived
+from vehicle_server.derived.health_windows import CLOSE_ENGINE_ZERO, CLOSE_UNKNOWN
 from vehicle_server.ingest import ingest_path
 from vehicle_server.position import is_position_name
 from vehicle_server.ride_summary import load_ride_summary
+
+from .make_demo_session import build
 
 SESSION_ID = "20260101-090000-5e55"
 RAW_FILES = ("telemetry.csv", "signals.csv", "events.csv")
@@ -65,7 +69,7 @@ def test_demo_session_closes_every_window_and_is_deterministic(tmp_path: Path):
     reasons = {
         instance["close_reason"] for window in windows.values() for instance in window["instances"]
     }
-    assert {"engine_zero", "unknown"} <= reasons
+    assert {CLOSE_ENGINE_ZERO, CLOSE_UNKNOWN} <= reasons
 
     summary = load_ride_summary(settings.sessions_dir / SESSION_ID, SESSION_ID)
     by_name = {entry["name"]: entry for entry in summary["signals"]}
@@ -79,5 +83,10 @@ def test_demo_session_closes_every_window_and_is_deterministic(tmp_path: Path):
         with (raw / name).open(newline="") as handle:
             header = next(csv.reader(handle))
         assert not any(is_position_name(column) for column in header), name
+    parquet_dir = settings.sessions_dir / SESSION_ID / "parquet"
+    assert not (parquet_dir / "gps.parquet").exists()
+    for path in sorted(parquet_dir.glob("*.parquet")):
+        names = pq.read_schema(path).names
+        assert not any(is_position_name(column) for column in names), path.name
 
     assert zipped.is_file()

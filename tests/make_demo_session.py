@@ -11,9 +11,9 @@ The session is synthetic and has no GPS block or position column. Names, DIDs, s
 window thresholds come from the pinned vehicle-defs catalog; the date defaults to a fixed
 day so two runs are byte-identical.
 
-    uv run python scripts/make_demo_session.py --out <dir>
-    uv run python scripts/make_demo_session.py --out <dir> --zip
-    uv run python scripts/make_demo_session.py --out <dir> --date 2026-01-01
+    uv run python -m tests.make_demo_session --out <dir>
+    uv run python -m tests.make_demo_session --out <dir> --zip
+    uv run python -m tests.make_demo_session --out <dir> --date 2026-01-01
 """
 
 from __future__ import annotations
@@ -22,27 +22,21 @@ import argparse
 import json
 import math
 import shutil
-import sys
 import tempfile
 import zipfile
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
-
-from tests.make_fixtures import write_csv  # noqa: E402
-from vehicle_server.decode import SIGNALS_HEADER, V4_HEADER, vsig_state  # noqa: E402
-from vehicle_server.defs import (  # noqa: E402
-    ble as defs_ble,
-)
-from vehicle_server.defs import (  # noqa: E402
+from vehicle_server.decode import SIGNALS_HEADER, V4_HEADER
+from vehicle_server.defs import ble as defs_ble
+from vehicle_server.defs import (
     vehicle_catalog,
     vehicle_cl250,
     vehicle_constants,
     vehicle_derived,
 )
+
+from .make_fixtures import vsig_row_cells, write_csv
 
 DEFAULT_DATE = date(2026, 1, 1)
 START_HOUR_UTC = 9
@@ -179,11 +173,6 @@ def _raw(name: str, value: float) -> int:
     return int(round((value - entry["offset"]) * entry["factor_den"] / entry["factor_num"]))
 
 
-def _decode(name: str, raw: int) -> float:
-    entry = vehicle_catalog.SIGNALS[name]
-    return vehicle_catalog.decode(name, raw.to_bytes(entry["length"], "big"))
-
-
 def _coolant_at(t_ms: int) -> float:
     if t_ms < WARM_START:
         return AMBIENT_C
@@ -265,7 +254,6 @@ def _engine_speed_gap(t_ms: int) -> bool:
 
 
 def _signal_rows(start: datetime) -> list[list[str]]:
-    state = str(vsig_state("valid"))
     rows: list[list[str]] = []
     block_seq = 0
     for t_ms in range(0, DURATION_MS + 1, TICK_MS):
@@ -277,26 +265,21 @@ def _signal_rows(start: datetime) -> list[list[str]]:
         rx = _utc_iso(start, t_ms)
         seq = block_seq % 256
         block_seq += 1
-        for name in names:
-            raw = _raw(name, _value(name, t_ms))
-            decoded = _decode(name, raw)
-            entry = vehicle_catalog.SIGNALS[name]
+        for index, name in enumerate(names):
             rows.append(
-                [
+                vsig_row_cells(
                     rx,
-                    str(t_ms),
-                    str(seq),
-                    "0",
-                    str(t_ms),
-                    str(len(ALL_DIDS)),
-                    str(first_record),
-                    str(entry["did"]),
-                    state,
-                    "0",
-                    str(raw),
-                    name,
-                    repr(decoded),
-                ]
+                    t_ms,
+                    seq,
+                    0,
+                    first_record,
+                    vehicle_catalog.SIGNALS[name]["did"],
+                    "valid",
+                    0,
+                    _raw(name, _value(name, t_ms)),
+                    index == 0,
+                    table_len=len(ALL_DIDS),
+                )
             )
     return rows
 
@@ -316,9 +299,9 @@ def _meta(session_date: date, start: datetime) -> dict[str, object]:
         "vehicle_config": "stock",
         "condition_label": "synthetic-demo",
         "route_type": "desk demo",
-        "note": "Synthetic session from scripts/make_demo_session.py; never a real ride.",
+        "note": "Synthetic session from tests/make_demo_session.py; never a real ride.",
         "app_version": "synthetic-demo",
-        "ble_schema_version": 4,
+        "ble_schema_version": defs_ble.CURRENT_VERSION,
         "vehicle_signal_block_version": defs_ble.VSIG_BLOCK_VERSION,
         "device_name": "CL250-synthetic",
         "synthetic": True,

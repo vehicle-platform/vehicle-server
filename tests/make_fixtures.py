@@ -991,6 +991,7 @@ def vsig_row_cells(
     age_ms: int,
     raw: int,
     first_in_block: bool,
+    table_len: int = len(VSIG_TABLE),
 ) -> list[str]:
     """One signals.csv row; `signal` / `value` as the app writes them (catalog decode)."""
     name = vehicle_catalog.BY_DID.get(did)
@@ -1004,7 +1005,7 @@ def vsig_row_cells(
         str(seq),
         str(lost if first_in_block else 0),
         str(rx_mono_ms),
-        str(len(VSIG_TABLE)),
+        str(table_len),
         str(first_record),
         str(did),
         str(VSIG_STATE[state]),

@@ -451,12 +451,12 @@ unchanged. If D-079 or the defs description differs from this reading, they win.
 
 #### Synthetic demo session
 
-`uv run python scripts/make_demo_session.py --out <dir>` writes a deterministic 20-minute
+`uv run python -m tests.make_demo_session --out <dir>` writes a deterministic 20-minute
 session named `synthetic-demo-20260101` (add `--zip` for a zip, `--date YYYY-MM-DD` to change
 the day). It is synthetic, never a real ride, has no GPS block or position column, and its
 values come from the pinned defs catalog. It exercises all five D-079 windows (including one
 `engine_zero` and one `unknown` close), a qualifying and a short warm idle, cruises in gears
-4-6, three D-075 stops and a post-stop cool-down. Import it with
+4-6, two D-075 stops and a final engine stop with a post-stop cool-down. Import it with
 `uv run vehicle-server import <dir-or-zip>`, then view the ride in vehicle-analyzer view E
 (summary and Health windows card) and on the phone under Server rides.
 
