@@ -179,28 +179,32 @@ def _signal_entry(
         for key in ("reason", "pending_inputs", "missing", "message"):
             if key in entry:
                 response[key] = entry[key]
-        return response
-
-    base = {
-        "name": name,
-        "status": "computed",
-        "unit": spec["unit"],
-        "range": list(spec["range"]),
-    }
-    if spec.get("per_gear"):
-        return {**base, **_per_gear_entry(name, rows)}
-    bins = list(spec.get("bins") or [])
-    if bins:
-        return {
-            **base,
-            **_binned_entry(name, entry, bins, rows),
+    else:
+        base = {
+            "name": name,
+            "status": "computed",
+            "unit": spec["unit"],
+            "range": list(spec["range"]),
         }
-    return {
-        **base,
-        "kind": "scalar",
-        "value": entry.get("value"),
-        "flag": entry.get("flag"),
-    }
+        if spec.get("per_gear"):
+            response = {**base, **_per_gear_entry(name, rows)}
+        else:
+            bins = list(spec.get("bins") or [])
+            if bins:
+                response = {
+                    **base,
+                    **_binned_entry(name, entry, bins, rows),
+                }
+            else:
+                response = {
+                    **base,
+                    "kind": "scalar",
+                    "value": entry.get("value"),
+                    "flag": entry.get("flag"),
+                }
+    if spec.get("window"):
+        response["window"] = spec["window"]
+    return response
 
 
 def build_ride_summary(
