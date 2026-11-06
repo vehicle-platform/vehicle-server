@@ -209,6 +209,66 @@ def test_summary_scalars_are_in_defs_order_and_keep_status_fields(
     }
 
 
+def test_summary_entries_carry_the_defs_window_key(settings: Settings, client: TestClient):
+    window_scalar = "window_key_on_rest_voltage"
+    window_missing = "window_cruise_final_drive_residual"
+    _write_report(
+        settings,
+        SESSION_ID,
+        _block(
+            _summary(
+                {
+                    window_scalar: {
+                        "status": "computed",
+                        "value": 12.6,
+                        "unit": "V",
+                        "flag": None,
+                    },
+                    window_missing: {
+                        "status": "not_implemented",
+                        "reason": "definition: test",
+                    },
+                }
+            )
+        ),
+    )
+    body = _get_summary(client).json()
+    by_name = {entry["name"]: entry for entry in body["signals"]}
+    assert by_name[window_scalar]["window"] == vehicle_derived.SIGNALS[window_scalar]["window"]
+    assert by_name[window_missing]["window"] == vehicle_derived.SIGNALS[window_missing]["window"]
+    assert "window" not in by_name["ride_distance"]
+    windows = {entry["window"] for entry in body["signals"] if "window" in entry}
+    assert windows <= set(vehicle_derived.WINDOWS)
+
+
+def test_build_ride_summary_adds_the_window_key_at_function_level():
+    report = {
+        "derived_summary": _block(
+            {
+                "window_key_on_rest_voltage": {
+                    "status": "computed",
+                    "value": 12.6,
+                    "unit": "V",
+                    "flag": None,
+                },
+                "ride_distance": {
+                    "status": "computed",
+                    "value": 1.0,
+                    "unit": "km",
+                    "flag": None,
+                },
+            }
+        )
+    }
+    body = ride_summary.build_ride_summary(SESSION_ID, report)
+    by_name = {entry["name"]: entry for entry in body["signals"]}
+    assert (
+        by_name["window_key_on_rest_voltage"]["window"]
+        == vehicle_derived.SIGNALS["window_key_on_rest_voltage"]["window"]
+    )
+    assert "window" not in by_name["ride_distance"]
+
+
 def test_summary_binned_cells_and_axes(settings: Settings, client: TestClient):
     signals = _summary({})
     signals["ride_coolant_time_at_temp"] = {
