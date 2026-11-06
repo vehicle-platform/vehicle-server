@@ -79,16 +79,23 @@ def _input(
 ) -> WindowInput:
     stale_after_ms = rng.choice((1_000, 5_000, 20_000, 120_000))
     choices = _candidates(spec, name, trigger)
+    segments: tuple[int, ...] = (2_000, 5_000, 10_000, 30_000, 60_000, 120_000)
+    steps: tuple[int, ...] = (500, 1_000, 2_500, 5_000)
+    if name == trigger and spec["opens_on"] == "engine_start" and rng.random() < 0.5:
+        # Engine-start windows are short (W2: a few seconds): segments shorter than the window
+        # let a random series drop the trigger to exactly 0 while an instance is open.
+        segments = (250, 500, 1_000, 2_000)
+        steps = (250, 500)
     current = rng.choice(choices)
     times: list[int] = []
     values: list[float | None] = []
     t = 0
     while t <= session_len:
-        stop = min(session_len + 1, t + rng.choice((2_000, 5_000, 10_000, 30_000, 60_000, 120_000)))
+        stop = min(session_len + 1, t + rng.choice(segments))
         while t < stop:
             times.append(t)
             values.append(current)
-            t += rng.choice((500, 1_000, 2_500, 5_000))
+            t += rng.choice(steps)
         if rng.random() < 0.15:
             t += rng.choice((stale_after_ms + 1, stale_after_ms * 2))
         if rng.random() < 0.7:
@@ -96,51 +103,49 @@ def _input(
     return WindowInput(tuple(times), tuple(values), stale_after_ms)
 
 
-def _run(
-    key: str, rng: random.Random, seed: int | None = None
-) -> tuple[WindowResult, dict[str, WindowInput], str | None]:
+def _run(key: str, rng: random.Random) -> tuple[WindowResult, dict[str, WindowInput], str | None]:
     spec = WINDOWS[key]
     trigger = summary._window_trigger(spec)  # the production trigger (D-069 item 3)
     names = input_names(spec, trigger)
     session_len = _timeline(rng)
-    if seed is not None and trigger is not None:
-        forced = _forced_trigger(key, trigger, session_len, seed)
-        if forced is not None:
-            session_len, inputs = forced
-            return evaluate_window(spec, inputs, trigger), inputs, trigger
     inputs = {name: _input(rng, spec, name, trigger, session_len) for name in names}
     return evaluate_window(spec, inputs, trigger), inputs, trigger
 
 
-def _forced_trigger(
-    key: str, trigger: str, session_len: int, seed: int
-) -> tuple[int, dict[str, WindowInput]] | None:
-    """Deterministic trigger series for the close reasons random seeds do not always hit."""
-    if key == "W2_CRANK":
-        if seed == 0:  # engine_start -> exactly 0 while open
-            return session_len, {
-                trigger: WindowInput(
-                    (0, 1_000, 2_000, 3_000, 4_000),
-                    (0.0, 1_200.0, 1_200.0, 0.0, 0.0),
-                    120_000,
-                )
-            }
-        if seed == 1:  # open near the end, no transition closes it
-            return 60_000, {
-                trigger: WindowInput(
-                    (0, 58_000, 59_000, 60_000),
-                    (0.0, 0.0, 1_200.0, 1_200.0),
-                    120_000,
-                )
-            }
-        if seed == 2:  # the trigger goes stale while the instance is open
-            return session_len, {
-                trigger: WindowInput((0, 1_000, 2_000), (0.0, 1_200.0, 1_200.0), 500)
-            }
-    if key == "W5_POST_STOP" and seed == 3:
-        long_len = int(WINDOWS[key]["max_duration_ms"]) + 60_000
-        return long_len, {trigger: WindowInput((0, 1_000, long_len), (1_200.0, 0.0, 0.0), long_len)}
-    return None
+def _directed(key: str) -> list[dict[str, WindowInput]]:
+    """Trigger-only series for close reasons the random timelines cannot reach.
+
+    The random sessions last at most 180 s, so W5's max-duration close needs a longer session; the
+    W2 cases pin the engine_start closes to exact samples. They run in addition to the seeds.
+    """
+    spec = WINDOWS[key]
+    trigger = summary._window_trigger(spec)
+    if trigger is None:
+        return []
+    if spec["opens_on"] == "engine_start":
+        return [
+            # -> exactly 0 while open: engine_zero at that sample
+            {trigger: WindowInput((0, 1_000, 2_000, 3_000), (0.0, 1_200.0, 0.0, 0.0), 120_000)},
+            # opens on the last samples, nothing closes it: session_end
+            {trigger: WindowInput((0, 58_000, 59_000), (0.0, 0.0, 1_200.0), 120_000)},
+            # the trigger goes stale while open: unknown
+            {trigger: WindowInput((0, 1_000), (0.0, 1_200.0), 500)},
+        ]
+    if spec["opens_on"] == "engine_stop":
+        long_len = int(spec["max_duration_ms"]) + 60_000
+        return [{trigger: WindowInput((0, 1_000, long_len), (1_200.0, 0.0, 0.0), long_len)}]
+    return []
+
+
+def _cases(key: str) -> list[tuple[WindowResult, dict[str, WindowInput], str | None]]:
+    """The 200 seeded series followed by the directed ones."""
+    trigger = summary._window_trigger(WINDOWS[key])
+    seeded = [_run(key, random.Random(seed)) for seed in SEEDS]
+    directed = [
+        (evaluate_window(WINDOWS[key], inputs, trigger), inputs, trigger)
+        for inputs in _directed(key)
+    ]
+    return seeded + directed
 
 
 def _value_at(series: WindowInput, t: int) -> float | None:
@@ -164,14 +169,12 @@ def _reachable_reasons(spec: dict) -> set[str]:
 @pytest.mark.parametrize("key", list(WINDOWS))
 def test_engine_zero_and_reason_coverage(key: str):
     spec = WINDOWS[key]
-    trigger_name = summary._window_trigger(spec)
     seen: set[str] = set()
-    for seed in SEEDS:
-        result, inputs, trigger = _run(key, random.Random(seed), seed)
+    for result, inputs, trigger in _cases(key):
         seen.update(instance.close_reason for instance in result.instances)
-        if trigger_name is None:
+        if trigger is None:
             continue
-        trigger_input = inputs[trigger_name]
+        trigger_input = inputs[trigger]
         for instance in result.instances:
             if instance.close_reason == CLOSE_ENGINE_ZERO:
                 zero = next(
@@ -180,12 +183,21 @@ def test_engine_zero_and_reason_coverage(key: str):
                     if t >= instance.open_ms and value == 0.0
                 )
                 assert instance.close_ms == zero
-            if (
-                spec["opens_on"] != "engine_stop"
-                and _value_at(trigger_input, instance.open_ms) == 0.0
-            ):
-                pytest.fail(f"{key} opened while the trigger was 0")
+            if spec["opens_on"] != "engine_stop":
+                assert _value_at(trigger_input, instance.open_ms) != 0.0, (key, instance)
     assert _reachable_reasons(spec) <= seen, (key, seen)
+
+
+@pytest.mark.parametrize(
+    "key", [key for key, spec in WINDOWS.items() if spec["opens_on"] == "engine_start"]
+)
+def test_random_series_reach_engine_zero(key: str):
+    reasons = {
+        instance.close_reason
+        for seed in SEEDS
+        for instance in _run(key, random.Random(seed))[0].instances
+    }
+    assert CLOSE_ENGINE_ZERO in reasons
 
 
 def _assert_properties(key: str, result: WindowResult) -> None:
@@ -211,7 +223,7 @@ def _assert_properties(key: str, result: WindowResult) -> None:
 
 @pytest.mark.parametrize("key", list(WINDOWS))
 def test_seeded_series_are_not_vacuous(key: str):
-    results = [_run(key, random.Random(seed), seed)[0] for seed in SEEDS]
+    results = [_run(key, random.Random(seed))[0] for seed in SEEDS]
 
     assert any(result.instances for result in results)
     assert any(result.qualifying_count for result in results)
@@ -219,8 +231,7 @@ def test_seeded_series_are_not_vacuous(key: str):
 
 @pytest.mark.parametrize("key", list(WINDOWS))
 def test_seeded_window_properties(key: str):
-    for seed in SEEDS:
-        result, inputs, trigger = _run(key, random.Random(seed), seed)
+    for result, inputs, trigger in _cases(key):
         _assert_properties(key, result)
 
         again = evaluate_window(WINDOWS[key], inputs, trigger)
@@ -230,8 +241,7 @@ def test_seeded_window_properties(key: str):
 @pytest.mark.parametrize("key", list(WINDOWS))
 def test_time_shift_moves_every_instance(key: str):
     shift = 1_000_000
-    for seed in SEEDS:
-        result, inputs, trigger = _run(key, random.Random(seed), seed)
+    for result, inputs, trigger in _cases(key):
         shifted = {
             name: WindowInput(
                 tuple(t + shift for t in series.times), series.values, series.stale_after_ms
